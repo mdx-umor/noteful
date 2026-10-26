@@ -40,7 +40,7 @@ impl NotebookApp {
             .expect("storage");
         let saver = Saver::start(store.clone());
         let mut lib = store.load_library();
-        let prefs = Prefs::load(store.root());
+        let prefs = Prefs::load(&store);
 
         // Trash older than 30 days is removed for good.
         for id in lib.expired_trash(30) {
@@ -63,9 +63,9 @@ impl NotebookApp {
             #[cfg(feature = "autotest")]
             autotest: crate::autotest::AutoTest::from_env(),
         };
-        if app.lib.notebooks.is_empty() && !app.store.root().join("welcomed").exists() {
+        if app.lib.notebooks.is_empty() && app.store.read_file("welcomed").is_none() {
             app.create_welcome();
-            let _ = std::fs::write(app.store.root().join("welcomed"), b"1");
+            let _ = app.store.write_file("welcomed", b"1");
         }
         if app.prefs.auto_backup && !app.lib.notebooks.is_empty() {
             let day = 86_400_000;
@@ -181,12 +181,26 @@ impl NotebookApp {
             .get(id)
             .map(|m| m.title.clone())
             .unwrap_or_else(|| "Notebook".into());
-        match self
-            .store
-            .export(&format!("{title}.pdf"), &pdf::export(&doc, &title))
+        let msg = self.export_file(&format!("{title}.pdf"), &pdf::export(&doc, &title), "application/pdf");
+        self.show_toast(msg);
+    }
+
+    /// Saves an exported file: into Files › Notebook on iPad, as a download on the web.
+    fn export_file(&self, name: &str, bytes: &[u8], mime: &str) -> String {
+        #[cfg(target_arch = "wasm32")]
         {
-            Ok(_) => self.show_toast("PDF saved to Files › Notebook › Exports"),
-            Err(e) => self.show_toast(format!("Export failed: {e}")),
+            match crate::web::download(name, bytes, mime) {
+                Ok(()) => format!("Downloaded {name}"),
+                Err(e) => format!("Export failed: {e}"),
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = mime;
+            match self.store.export(name, bytes) {
+                Ok(_) => "Saved to Files › Notebook › Exports".into(),
+                Err(e) => format!("Export failed: {e}"),
+            }
         }
     }
 
@@ -466,6 +480,7 @@ impl eframe::App for NotebookApp {
         // Editor events and autosave.
         let mut close = false;
         let mut export_pdf = None;
+        let mut pending_png: Vec<(String, Vec<u8>)> = Vec::new();
         if let Some(ed) = &mut self.editor {
             for e in std::mem::take(&mut ed.events) {
                 match e {
@@ -474,13 +489,7 @@ impl eframe::App for NotebookApp {
                     EditorEvent::ExportPng(i) => {
                         let png = render::render_png(&ed.doc.pages[i], 1654);
                         let name = format!("{} - page {}.png", ed.title, i + 1);
-                        self.toast = Some((
-                            match self.store.export(&name, &png) {
-                                Ok(_) => "PNG saved to Files › Notebook › Exports".into(),
-                                Err(e) => format!("Export failed: {e}"),
-                            },
-                            now_ms() as f64 / 1000.0,
-                        ));
+                        pending_png.push((name, png));
                     }
                     EditorEvent::Toast(s) => self.toast = Some((s, now_ms() as f64 / 1000.0)),
                 }
@@ -491,6 +500,10 @@ impl eframe::App for NotebookApp {
             } else if ed.dirty {
                 ctx.request_repaint_after(std::time::Duration::from_millis(700));
             }
+        }
+        for (name, png) in pending_png {
+            let msg = self.export_file(&name, &png, "image/png");
+            self.show_toast(msg);
         }
         if let Some(id) = export_pdf {
             self.flush_editor();
@@ -504,7 +517,7 @@ impl eframe::App for NotebookApp {
         if let Ok(s) = serde_json::to_string(&self.prefs)
             && s != self.saved_prefs
         {
-            self.prefs.save(self.store.root());
+            self.prefs.save(&self.store);
             self.saved_prefs = s;
         }
         self.toast_ui(&ctx, &pal);
@@ -519,12 +532,12 @@ impl eframe::App for NotebookApp {
         }
     }
 
-    #[cfg(feature = "autotest")]
+    #[cfg(any(feature = "autotest", target_arch = "wasm32"))]
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.shutdown();
     }
 
-    #[cfg(not(feature = "autotest"))]
+    #[cfg(not(any(feature = "autotest", target_arch = "wasm32")))]
     fn on_exit(&mut self) {
         self.shutdown();
     }
@@ -540,8 +553,9 @@ impl NotebookApp {
     fn shutdown(&mut self) {
         self.close_editor();
         self.save_library();
-        self.prefs.save(self.store.root());
+        self.prefs.save(&self.store);
         // Give the saver a moment to finish.
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
 }

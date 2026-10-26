@@ -91,8 +91,9 @@ impl Editor {
         prefs: &mut Prefs,
         clipboard: &mut Vec<Item>,
     ) {
-        // On iPad only the Pencil reports force.
-        let is_pencil = force.is_some();
+        // On iPad only the Pencil reports force. In Safari every touch carries a force
+        // value, but fingers report 0.
+        let is_pencil = if cfg!(target_arch = "wasm32") { force.is_some_and(|f| f > 0.0) } else { force.is_some() };
         if is_pencil {
             if !prefs.pencil_seen {
                 prefs.pencil_seen = true;
@@ -849,7 +850,11 @@ impl Editor {
 /// Pencil's maximum, so the raw value is boosted before the pen curve is applied.
 fn pressure(force: Option<f32>, prefs: &Prefs) -> f32 {
     match force {
-        Some(f) => (f * 2.2 * prefs.pressure_gain).clamp(0.03, 1.0),
+        Some(f) => {
+            // Safari already reports Pencil force as 0..1; native iPadOS reports it raw.
+            let boost = if cfg!(target_arch = "wasm32") { 1.3 } else { 2.2 };
+            (f * boost * prefs.pressure_gain).clamp(0.03, 1.0)
+        }
         None => 0.5,
     }
 }

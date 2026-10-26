@@ -1,6 +1,7 @@
 //! Notebook v1: a handwriting notebook for iPad and Apple Pencil, written in Rust.
 
 mod app;
+#[cfg(not(target_arch = "wasm32"))]
 mod applog;
 #[cfg(feature = "autotest")]
 mod autotest;
@@ -11,7 +12,15 @@ mod prefs;
 mod saver;
 mod textures;
 mod theme;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    web::start();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 /// Where crash reports go. On iPad this is visible in Files › On My iPad › Notebook.
 fn crash_log_path() -> std::path::PathBuf {
     let home = std::env::var_os("HOME")
@@ -24,6 +33,7 @@ fn crash_log_path() -> std::path::PathBuf {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn write_crash_log(msg: &str) {
     let text = format!("Notebook v1 crash report\n\n{msg}\n");
     log::error!("{msg}");
@@ -35,6 +45,7 @@ fn write_crash_log(msg: &str) {
     eprintln!("{text}");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Ask the GPU only for limits it actually has. The generic defaults request 16
 /// shader varyings, but iPad GPUs (Metal) report 15, which made start-up fail.
 fn gpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
@@ -57,6 +68,7 @@ fn gpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     std::panic::set_hook(Box::new(|info| {
         let bt = std::backtrace::Backtrace::force_capture();

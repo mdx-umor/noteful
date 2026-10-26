@@ -1340,11 +1340,15 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "js-sys",
  "log",
  "notebook_core",
  "png",
  "serde",
  "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -1353,10 +1357,12 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "epaint_default_fonts",
+ "js-sys",
  "png",
  "serde",
  "serde_json",
  "tiny-skia",
+ "web-sys",
 ]
 
 [[package]]

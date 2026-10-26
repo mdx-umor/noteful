@@ -3,7 +3,7 @@
 use notebook_core::library::SortBy;
 use notebook_core::{Paper, PenKind, Rgba, ShapeKind, Template};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use notebook_core::storage::Store;
 
 pub const PEN_SIZES_MM: [f32; 5] = [0.35, 0.8, 1.2, 1.9, 3.8];
 pub const HL_SIZES_MM: [f32; 5] = [2.0, 3.5, 5.0, 7.0, 10.0];
@@ -111,19 +111,17 @@ impl Default for Prefs {
 }
 
 impl Prefs {
-    pub fn load(dir: &Path) -> Prefs {
-        std::fs::read(dir.join("prefs.json"))
-            .ok()
+    pub fn load(store: &Store) -> Prefs {
+        store
+            .read_file("prefs.json")
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default()
     }
 
-    pub fn save(&self, dir: &Path) {
+    pub fn save(&self, store: &Store) {
         if let Ok(bytes) = serde_json::to_vec_pretty(self) {
-            let tmp = dir.join("prefs.tmp");
-            if std::fs::write(&tmp, bytes).is_ok() {
-                let _ = std::fs::rename(tmp, dir.join("prefs.json"));
-            }
+            let _ = store.write_file("prefs.json", &bytes);
         }
     }
+
 }
