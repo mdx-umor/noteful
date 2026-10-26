@@ -11,7 +11,33 @@ mod saver;
 mod textures;
 mod theme;
 
+/// Where crash reports go. On iPad this is visible in Files › On My iPad › Notebook.
+fn crash_log_path() -> std::path::PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default();
+    if cfg!(target_os = "ios") {
+        home.join("Documents/Notebook-crash-log.txt")
+    } else {
+        std::env::temp_dir().join("Notebook-crash-log.txt")
+    }
+}
+
+fn write_crash_log(msg: &str) {
+    let text = format!("Notebook v1 crash report\n\n{msg}\n");
+    let path = crash_log_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, &text);
+    eprintln!("{text}");
+}
+
 fn main() -> eframe::Result {
+    std::panic::set_hook(Box::new(|info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        write_crash_log(&format!("{info}\n\n{bt}"));
+    }));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Notebook")
@@ -23,9 +49,13 @@ fn main() -> eframe::Result {
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
-    eframe::run_native(
+    let result = eframe::run_native(
         "Notebook",
         options,
         Box::new(|cc| Ok(Box::new(app::NotebookApp::new(cc)))),
-    )
+    );
+    if let Err(e) = &result {
+        write_crash_log(&format!("Startup failed: {e}"));
+    }
+    result
 }
