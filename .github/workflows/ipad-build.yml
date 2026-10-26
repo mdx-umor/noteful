@@ -1,0 +1,65 @@
+# Builds Notebook v1 for iPad on a GitHub Mac and uploads an unsigned .ipa.
+# Sign and install it with your own Apple ID (Sideloadly, AltStore or Xcode).
+name: iPad build
+
+on:
+  push:
+    paths:
+      - "notebook-v1/**"
+      - ".github/workflows/ipad-build.yml"
+  workflow_dispatch:
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust for iPad
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-apple-ios
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            notebook-v1/target
+          key: ios-${{ hashFiles('notebook-v1/Cargo.lock') }}
+
+      - name: Core tests
+        working-directory: notebook-v1
+        run: cargo test -p notebook_core --locked
+
+      - name: Generate Xcode project
+        working-directory: notebook-v1/ios
+        run: |
+          brew install xcodegen
+          xcodegen
+
+      - name: Build app (unsigned)
+        working-directory: notebook-v1/ios
+        run: |
+          xcodebuild -project Notebook.xcodeproj -target Notebook -configuration Release \
+            -sdk iphoneos -arch arm64 \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | tail -40
+
+      - name: Package .ipa
+        working-directory: notebook-v1/ios
+        run: |
+          APP=build/Release-iphoneos/Notebook.app
+          file "$APP/Notebook"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry Notebook-v1-unsigned.ipa Payload
+          ls -la Notebook-v1-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Notebook-v1-unsigned-ipa
+          path: notebook-v1/ios/Notebook-v1-unsigned.ipa
+          retention-days: 30
