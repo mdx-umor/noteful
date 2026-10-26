@@ -107,13 +107,17 @@ jobs:
           xcrun simctl bootstatus "$DEV" -b
           xcrun simctl install "$DEV" build/Release-iphonesimulator/Notebook.app
           BID=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" build/Release-iphonesimulator/Notebook.app/Info.plist)
-          (xcrun simctl launch --console-pty "$DEV" "$BID" > sim/console.txt 2>&1 &)
+          (xcrun simctl launch --console "$DEV" "$BID" > sim/console.txt 2>&1 &)
           sleep 25
           xcrun simctl io "$DEV" screenshot sim/screenshot.png || true
           if xcrun simctl spawn "$DEV" launchctl list | grep -q "$BID"; then echo "RUNNING" | tee sim/status.txt; else echo "NOT RUNNING" | tee sim/status.txt; fi
           xcrun simctl spawn "$DEV" log show --last 3m --style compact --predicate 'process == "Notebook" OR eventMessage CONTAINS "Notebook"' > sim/log.txt 2>&1 || true
           DATA=$(xcrun simctl get_app_container "$DEV" "$BID" data 2>/dev/null || true)
-          [ -n "$DATA" ] && cp "$DATA/Documents/Notebook-crash-log.txt" sim/ 2>/dev/null || true
+          echo "App data: $DATA"
+          ls -la "$DATA/Documents" || true
+          cp "$DATA"/Documents/Notebook-*.txt sim/ 2>/dev/null || true
+          echo "===== Notebook-log.txt ====="; cat sim/Notebook-log.txt 2>/dev/null || true
+          echo "===== console ====="; cat sim/console.txt || true
           cp ~/Library/Logs/DiagnosticReports/*otebook* sim/ 2>/dev/null || true
           tail -50 sim/console.txt || true
           cat sim/Notebook-crash-log.txt 2>/dev/null | head -60 || true

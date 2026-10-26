@@ -1,6 +1,7 @@
 //! Notebook v1: a handwriting notebook for iPad and Apple Pencil, written in Rust.
 
 mod app;
+mod applog;
 #[cfg(feature = "autotest")]
 mod autotest;
 mod editor;
@@ -25,6 +26,7 @@ fn crash_log_path() -> std::path::PathBuf {
 
 fn write_crash_log(msg: &str) {
     let text = format!("Notebook v1 crash report\n\n{msg}\n");
+    log::error!("{msg}");
     let path = crash_log_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -38,6 +40,8 @@ fn main() -> eframe::Result {
         let bt = std::backtrace::Backtrace::force_capture();
         write_crash_log(&format!("{info}\n\n{bt}"));
     }));
+    applog::init();
+    log::info!("Notebook starting (HOME={:?})", std::env::var_os("HOME"));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Notebook")
@@ -52,10 +56,16 @@ fn main() -> eframe::Result {
     let result = eframe::run_native(
         "Notebook",
         options,
-        Box::new(|cc| Ok(Box::new(app::NotebookApp::new(cc)))),
+        Box::new(|cc| {
+            log::info!("Window ready; creating app");
+            let app = app::NotebookApp::new(cc);
+            log::info!("App created");
+            Ok(Box::new(app))
+        }),
     );
-    if let Err(e) = &result {
-        write_crash_log(&format!("Startup failed: {e}"));
+    match &result {
+        Err(e) => write_crash_log(&format!("Startup failed: {e}")),
+        Ok(()) => log::info!("Event loop finished normally"),
     }
     result
 }

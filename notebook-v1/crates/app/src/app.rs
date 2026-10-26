@@ -416,6 +416,9 @@ fn welcome_doc() -> Document {
 impl eframe::App for NotebookApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if ctx.cumulative_frame_nr() < 2 {
+            log::info!("Drawing frame {}", ctx.cumulative_frame_nr());
+        }
         if self.applied_dark != Some(self.prefs.dark_ui) {
             theme::apply(&ctx, self.prefs.dark_ui);
             self.applied_dark = Some(self.prefs.dark_ui);
