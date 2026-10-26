@@ -35,6 +35,28 @@ fn write_crash_log(msg: &str) {
     eprintln!("{text}");
 }
 
+/// Ask the GPU only for limits it actually has. The generic defaults request 16
+/// shader varyings, but iPad GPUs (Metal) report 15, which made start-up fail.
+fn gpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupCreateNew};
+    let mut setup = WgpuSetupCreateNew::without_display_handle();
+    setup.device_descriptor = std::sync::Arc::new(|adapter| {
+        let supported = adapter.limits();
+        eframe::wgpu::DeviceDescriptor {
+            label: Some("notebook device"),
+            required_limits: eframe::wgpu::Limits {
+                max_texture_dimension_2d: supported.max_texture_dimension_2d.min(8192),
+                ..supported
+            },
+            ..Default::default()
+        }
+    });
+    WgpuConfiguration {
+        wgpu_setup: WgpuSetup::CreateNew(setup),
+        ..Default::default()
+    }
+}
+
 fn main() -> eframe::Result {
     std::panic::set_hook(Box::new(|info| {
         let bt = std::backtrace::Backtrace::force_capture();
@@ -51,6 +73,7 @@ fn main() -> eframe::Result {
         multisampling: if cfg!(feature = "autotest") { 0 } else { 4 },
         #[cfg(feature = "autotest")]
         renderer: eframe::Renderer::Glow,
+        wgpu_options: gpu_options(),
         ..Default::default()
     };
     let result = eframe::run_native(
