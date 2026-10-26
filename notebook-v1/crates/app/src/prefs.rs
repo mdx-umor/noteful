@@ -1,9 +1,9 @@
 //! Tool settings and app preferences, saved as JSON next to the library.
 
 use notebook_core::library::SortBy;
+use notebook_core::storage::Store;
 use notebook_core::{Paper, PenKind, Rgba, ShapeKind, Template};
 use serde::{Deserialize, Serialize};
-use notebook_core::storage::Store;
 
 pub const PEN_SIZES_MM: [f32; 5] = [0.35, 0.8, 1.2, 1.9, 3.8];
 pub const HL_SIZES_MM: [f32; 5] = [2.0, 3.5, 5.0, 7.0, 10.0];
@@ -123,5 +123,4 @@ impl Prefs {
             let _ = store.write_file("prefs.json", &bytes);
         }
     }
-
 }

@@ -181,7 +181,11 @@ impl NotebookApp {
             .get(id)
             .map(|m| m.title.clone())
             .unwrap_or_else(|| "Notebook".into());
-        let msg = self.export_file(&format!("{title}.pdf"), &pdf::export(&doc, &title), "application/pdf");
+        let msg = self.export_file(
+            &format!("{title}.pdf"),
+            &pdf::export(&doc, &title),
+            "application/pdf",
+        );
         self.show_toast(msg);
     }
 

@@ -92,8 +92,16 @@ impl Editor {
         clipboard: &mut Vec<Item>,
     ) {
         // On iPad only the Pencil reports force. In Safari every touch carries a force
-        // value, but fingers report 0.
-        let is_pencil = if cfg!(target_arch = "wasm32") { force.is_some_and(|f| f > 0.0) } else { force.is_some() };
+        // value, but fingers report 0. Once a Pencil stroke has started, every event of
+        // that touch belongs to the Pencil: Safari reports force 0 as the Pencil lifts,
+        // which must not be mistaken for a finger (the stroke would never be saved).
+        let has_force = if cfg!(target_arch = "wasm32") {
+            force.is_some_and(|f| f > 0.0)
+        } else {
+            force.is_some()
+        };
+        let own_pencil_touch = self.pen_touch == Some(id) && !self.fingers.map.contains_key(&id);
+        let is_pencil = own_pencil_touch || (has_force && phase == TouchPhase::Start);
         if is_pencil {
             if !prefs.pencil_seen {
                 prefs.pencil_seen = true;
@@ -102,7 +110,12 @@ impl Editor {
                     "Apple Pencil connected: write with the Pencil, scroll and zoom with fingers",
                 );
             }
-            let p = pressure(force, prefs);
+            // A zero reading (the moment of lifting) keeps the last real pressure.
+            let p = if force.is_some_and(|f| f > 0.0) {
+                pressure(force, prefs)
+            } else {
+                self.last_pressure()
+            };
             match phase {
                 TouchPhase::Start => {
                     if self.pen_touch.is_none() && self.accepts(ctx, pos) {
@@ -132,6 +145,14 @@ impl Editor {
         }
 
         // ---------- fingers ----------
+        // While the Pencil is down, other touches are the writing hand resting on the
+        // screen: ignore them so they cannot scroll or cancel the stroke.
+        let pencil_down = self
+            .pen_touch
+            .is_some_and(|p| !self.fingers.map.contains_key(&p));
+        if pencil_down && !self.fingers.map.contains_key(&id) {
+            return;
+        }
         match phase {
             TouchPhase::Start => {
                 if !self.accepts(ctx, pos) && self.fingers.map.is_empty() {
@@ -273,6 +294,14 @@ impl Editor {
                     }
                 }
             }
+        }
+    }
+
+    /// Pressure of the last point of the stroke being drawn.
+    fn last_pressure(&self) -> f32 {
+        match &self.action {
+            Action::Ink { pts, .. } => pts.last().map_or(0.5, |p| p.p),
+            _ => 0.5,
         }
     }
 
@@ -852,7 +881,11 @@ fn pressure(force: Option<f32>, prefs: &Prefs) -> f32 {
     match force {
         Some(f) => {
             // Safari already reports Pencil force as 0..1; native iPadOS reports it raw.
-            let boost = if cfg!(target_arch = "wasm32") { 1.3 } else { 2.2 };
+            let boost = if cfg!(target_arch = "wasm32") {
+                1.3
+            } else {
+                2.2
+            };
             (f * boost * prefs.pressure_gain).clamp(0.03, 1.0)
         }
         None => 0.5,

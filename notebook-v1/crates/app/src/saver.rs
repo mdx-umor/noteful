@@ -97,7 +97,11 @@ impl Saver {
     #[cfg(target_arch = "wasm32")]
     pub fn start(store: Store) -> Saver {
         let (done_tx, done_rx) = channel::<String>();
-        Saver { store, done_tx, done_rx }
+        Saver {
+            store,
+            done_tx,
+            done_rx,
+        }
     }
 
     pub fn send(&self, job: Job) {
