@@ -1,0 +1,4 @@
+/target
+*.tmp
+ios/Notebook.xcodeproj
+ios/Notebook/Info.plist

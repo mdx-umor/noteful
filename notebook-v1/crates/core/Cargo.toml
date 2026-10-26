@@ -1,0 +1,13 @@
+[package]
+name = "notebook_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+tiny-skia = "0.12"
+ab_glyph = "0.2"
+epaint_default_fonts = "0.37"
+png = "0.18"
