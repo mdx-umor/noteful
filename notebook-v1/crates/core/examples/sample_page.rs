@@ -51,9 +51,9 @@ fn main() {
         wave(150.0, PenKind::Fountain, Rgba::rgb(30, 91, 216), mm(1.2), |t| 0.2 + 0.8 * (t * 9.0).sin().abs()),
         wave(200.0, PenKind::Brush, Rgba::rgb(217, 48, 37), mm(1.9), |t| (t * std::f32::consts::PI).sin()),
         handwriting(60.0, 280.0),
-        Item::new(Content::Shape(Shape { kind: ShapeKind::Rect, points: vec![[60.0, 340.0], [220.0, 440.0]], color: Rgba::rgb(24, 128, 56), width: 2.0, fill: Some(Rgba::rgb(24, 128, 56)), dashed: false })),
-        Item::new(Content::Shape(Shape { kind: ShapeKind::Ellipse, points: vec![[250.0, 340.0], [380.0, 440.0]], color: Rgba::rgb(123, 63, 228), width: 2.5, fill: None, dashed: true })),
-        Item::new(Content::Shape(Shape { kind: ShapeKind::Arrow, points: vec![[400.0, 440.0], [530.0, 350.0]], color: Rgba::BLACK, width: 2.0, fill: None, dashed: false })),
+        Item::new(Content::Shape(Shape { kind: ShapeKind::Rect, points: vec![[60.0, 340.0], [220.0, 440.0]], color: Rgba::rgb(24, 128, 56), width: 2.0, fill: Some(Rgba::rgb(24, 128, 56)), dashed: false, solid: false, dotted: false })),
+        Item::new(Content::Shape(Shape { kind: ShapeKind::Ellipse, points: vec![[250.0, 340.0], [380.0, 440.0]], color: Rgba::rgb(123, 63, 228), width: 2.5, fill: None, dashed: true, solid: false, dotted: false })),
+        Item::new(Content::Shape(Shape { kind: ShapeKind::Arrow, points: vec![[400.0, 440.0], [530.0, 350.0]], color: Rgba::BLACK, width: 2.0, fill: None, dashed: false, solid: false, dotted: false })),
         Item::new(Content::Text(TextBox { x: 60.0, y: 470.0, w: 470.0, text: "Notebook v1 — typed text wraps the same way on screen, in thumbnails and in exported PDFs.".into(), size: 18.0, color: Rgba::rgb(29, 29, 31) })),
     ];
     page.items = items.into_iter().map(Arc::new).collect();

@@ -25,6 +25,9 @@
 <canvas id="notebook-canvas"></canvas>
 <div id="loading"><div class="badge">N</div><div>Loading Notebook…</div><small>Works best in Safari on iPad with Apple Pencil.</small></div>
 <script>
+/*RUNTIME*/
+</script>
+<script>
 /*GLUE*/
 </script>
 <script>
@@ -35,6 +38,7 @@
     const raw = Uint8Array.from(atob("WASM_B64"), (c) => c.charCodeAt(0));
     const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream("gzip"));
     const bytes = await new Response(stream).arrayBuffer();
+    await NBFS.init();
     await wasm_bindgen({ module_or_path: bytes });
   } catch (e) {
     console.error(e);

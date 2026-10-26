@@ -57,11 +57,18 @@ mod disk {
 mod disk {
     use std::io;
     use std::path::Path;
+    use wasm_bindgen::prelude::*;
 
-    fn storage() -> io::Result<web_sys::Storage> {
-        web_sys::window()
-            .and_then(|w| w.local_storage().ok().flatten())
-            .ok_or_else(|| io::Error::other("browser storage is not available"))
+    // The page keeps every file in IndexedDB and mirrors it in memory, so reads are
+    // instant and there is no 5 MB limit (see web/template.htm, `NBFS`).
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_namespace = NBFS, js_name = get)]
+        fn nbfs_get(key: &str) -> Option<String>;
+        #[wasm_bindgen(js_namespace = NBFS, js_name = set)]
+        fn nbfs_set(key: &str, value: &str) -> bool;
+        #[wasm_bindgen(js_namespace = NBFS, js_name = del)]
+        fn nbfs_del(key: &str);
     }
 
     fn key(path: &Path) -> String {
@@ -70,7 +77,7 @@ mod disk {
 
     const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-    fn b64_encode(data: &[u8]) -> String {
+    pub fn b64_encode(data: &[u8]) -> String {
         let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
         for c in data.chunks(3) {
             let n = (c[0] as u32) << 16
@@ -88,6 +95,10 @@ mod disk {
     }
 
     fn b64_decode(s: &str) -> Option<Vec<u8>> {
+        let mut table = [255u8; 256];
+        for (i, &b) in B64.iter().enumerate() {
+            table[b as usize] = i as u8;
+        }
         let mut out = Vec::with_capacity(s.len() / 4 * 3);
         let mut buf = 0u32;
         let mut bits = 0;
@@ -95,8 +106,11 @@ mod disk {
             if ch == b'=' {
                 break;
             }
-            let v = B64.iter().position(|&b| b == ch)? as u32;
-            buf = buf << 6 | v;
+            let v = table[ch as usize];
+            if v == 255 {
+                return None;
+            }
+            buf = buf << 6 | v as u32;
             bits += 6;
             if bits >= 8 {
                 bits -= 8;
@@ -107,9 +121,7 @@ mod disk {
     }
 
     pub fn read(path: &Path) -> io::Result<Vec<u8>> {
-        let v = storage()?
-            .get_item(&key(path))
-            .map_err(|_| io::Error::other("storage read failed"))?
+        let v = nbfs_get(&key(path))
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not found"))?;
         if let Some(t) = v.strip_prefix("t:") {
             Ok(t.as_bytes().to_vec())
@@ -125,13 +137,15 @@ mod disk {
             Ok(t) => format!("t:{t}"),
             Err(_) => format!("b:{}", b64_encode(bytes)),
         };
-        storage()?
-            .set_item(&key(path), &v)
-            .map_err(|_| io::Error::other("browser storage is full"))
+        if nbfs_set(&key(path), &v) {
+            Ok(())
+        } else {
+            Err(io::Error::other("browser storage is full"))
+        }
     }
 
     pub fn remove(path: &Path) -> io::Result<()> {
-        let _ = storage()?.remove_item(&key(path));
+        nbfs_del(&key(path));
         Ok(())
     }
 
@@ -242,6 +256,25 @@ impl Store {
         Some((info.width, info.height, buf))
     }
 
+    fn asset_path(&self, id: Id) -> PathBuf {
+        self.root.join("assets").join(format!("{id}.jpg"))
+    }
+
+    /// Stores a picture (JPEG bytes) and returns its id.
+    pub fn save_asset(&self, bytes: &[u8]) -> io::Result<Id> {
+        let id = crate::model::new_id();
+        disk::write(&self.asset_path(id), bytes)?;
+        Ok(id)
+    }
+
+    pub fn load_asset(&self, id: Id) -> Option<Vec<u8>> {
+        disk::read(&self.asset_path(id)).ok()
+    }
+
+    pub fn delete_asset(&self, id: Id) {
+        let _ = disk::remove(&self.asset_path(id));
+    }
+
     pub fn delete_thumb(&self, id: Id) {
         let _ = disk::remove(&self.thumb_path(id));
     }
@@ -301,6 +334,14 @@ impl Store {
                     .and_then(|s| s.parse().ok())
             })
             .max()
+    }
+}
+
+impl crate::assets::AssetSource for Store {
+    fn image(&self, id: Id) -> Option<std::sync::Arc<crate::assets::RgbaImage>> {
+        let bytes = self.load_asset(id)?;
+        let img = crate::assets::decode_jpeg(&bytes)?;
+        Some(std::sync::Arc::new(crate::assets::downscale(&img, 1400)))
     }
 }
 

@@ -3,7 +3,8 @@
 use super::mesh::{place, samples_mesh};
 use super::*;
 use crate::icons::{self, Icon};
-use crate::prefs::{HL_SIZES_MM, PALETTE, PEN_SIZES_MM};
+use crate::prefs::{HL_SIZES_MM, PALETTE, PEN_SIZES_MM, TAPE_COLORS, TAPE_SIZES_MM, TOOL_NAMES, TapeKind};
+use notebook_core::presets::{self, Preset};
 use crate::textures;
 use crate::theme::{self, Palette, c32};
 use egui::{
@@ -139,7 +140,7 @@ impl Editor {
                 .show(ui, |ui| self.tool_bar(ui, prefs, clipboard, &pal));
             if self.sidebar {
                 egui::Panel::right("editor-side")
-                    .default_size(190.0)
+                    .default_size(250.0)
                     .resizable(true)
                     .frame(Frame::new().fill(pal.sidebar).inner_margin(Margin::same(8)))
                     .show(ui, |ui| self.sidebar_ui(ui, prefs, &pal));
@@ -207,16 +208,20 @@ impl Editor {
                 }
                 ui.add_space(4.0);
                 let tools = [
-                    (Tool::Pen, Icon::Pen, "Pen (P)"),
-                    (Tool::Highlighter, Icon::Highlighter, "Highlighter (H)"),
-                    (Tool::Eraser, Icon::Eraser, "Eraser (E)"),
-                    (Tool::Lasso, Icon::Lasso, "Lasso (L)"),
-                    (Tool::Hand, Icon::Hand, "Hand (Space)"),
-                    (Tool::Laser, Icon::Laser, "Laser pointer"),
-                    (Tool::Shape, Icon::Shapes, "Shapes (S)"),
-                    (Tool::Text, Icon::Text, "Text (T)"),
+                    (Tool::Pen, Icon::Pen, "Pen (F)", "Pen"),
+                    (Tool::Highlighter, Icon::Highlighter, "Highlighter (G)", "Highlighter"),
+                    (Tool::Tape, Icon::Tape, "Tape: hide notes to test yourself", "Tape"),
+                    (Tool::Eraser, Icon::Eraser, "Eraser (E)", "Eraser"),
+                    (Tool::Lasso, Icon::Lasso, "Lasso (A)", "Lasso"),
+                    (Tool::Hand, Icon::Hand, "Hand (H): scroll, follow links", "Hand"),
+                    (Tool::Laser, Icon::Laser, "Laser pointer", "Laser"),
+                    (Tool::Shape, Icon::Shapes, "Shapes (S)", "Shapes"),
+                    (Tool::Text, Icon::Text, "Text (T)", "Text"),
                 ];
-                for (t, ic, tip) in tools {
+                for (t, ic, tip, name) in tools {
+                    if !prefs.tool_visible(name) && self.tool != t {
+                        continue;
+                    }
                     let active = self.tool == t;
                     let r = icons::button(ui, ic, active, tip);
                     if r.clicked() {
@@ -233,14 +238,27 @@ impl Editor {
                     }
                 }
                 ui.add_space(4.0);
-                let ins = icons::button(
-                    ui,
-                    Icon::PlusCircle,
-                    self.popover == Popover::Insert,
-                    "Insert",
-                );
-                if ins.clicked() {
-                    self.toggle_popover(Popover::Insert, ins.rect);
+                if prefs.tool_visible("Stickers") {
+                    let st = icons::button(
+                        ui,
+                        Icon::Sticker,
+                        self.popover == Popover::Stickers,
+                        "Stickers",
+                    );
+                    if st.clicked() {
+                        self.toggle_popover(Popover::Stickers, st.rect);
+                    }
+                }
+                if prefs.tool_visible("Insert") {
+                    let ins = icons::button(
+                        ui,
+                        Icon::PlusCircle,
+                        self.popover == Popover::Insert,
+                        "Insert",
+                    );
+                    if ins.clicked() {
+                        self.toggle_popover(Popover::Insert, ins.rect);
+                    }
                 }
                 if ui
                     .add_enabled_ui(self.history.can_undo(), |ui| {
@@ -264,6 +282,7 @@ impl Editor {
                 // Current colour; tap opens the colour panel.
                 let color = match self.tool {
                     Tool::Highlighter => prefs.hl_color,
+                    Tool::Tape => prefs.tape_color,
                     Tool::Shape => prefs.shape_color,
                     Tool::Text => prefs.text_color,
                     Tool::Laser => prefs.laser_color,
@@ -274,7 +293,11 @@ impl Editor {
                 ui.painter()
                     .circle_stroke(r.center(), 16.0, EStroke::new(2.0, pal.accent));
                 if resp.on_hover_text("Colour").clicked() {
-                    self.toggle_popover(Popover::Color, r);
+                    if self.tool == Tool::Tape {
+                        self.toggle_popover(Popover::ToolSettings(Tool::Tape), r);
+                    } else {
+                        self.toggle_popover(Popover::Color, r);
+                    }
                 }
                 // Quick favourites for the pen.
                 if matches!(self.tool, Tool::Pen | Tool::Highlighter) {
@@ -372,7 +395,81 @@ impl Editor {
                         });
                     });
             });
-        let _ = (prefs, pal);
+        // Bottom-left: page number (tap = go to page), back chip after following a link.
+        egui::Area::new(EId::unique("page-chip"))
+            .order(Order::Foreground)
+            .pivot(Align2::LEFT_BOTTOM)
+            .fixed_pos(c.left_bottom() + vec2(14.0, -14.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if let Some(&back) = self.back_stack.last() {
+                        let b = egui::Button::new(
+                            RichText::new(format!("↶ Page {}", back + 1)).size(13.0),
+                        )
+                        .corner_radius(14);
+                        if ui.add(b).on_hover_text("Back to where you were").clicked() {
+                            self.go_back();
+                        }
+                    }
+                    let chip = egui::Button::new(
+                        RichText::new(format!(
+                            "{} of {}",
+                            self.current + 1,
+                            self.doc.pages.len()
+                        ))
+                        .size(13.0),
+                    )
+                    .corner_radius(14);
+                    let r = ui.add(chip).on_hover_text("Go to page");
+                    if r.clicked() {
+                        self.goto_text = (self.current + 1).to_string();
+                        self.toggle_popover(Popover::GoTo, r.rect);
+                    }
+                });
+            });
+        if prefs.show_timer {
+            egui::Area::new(EId::unique("study-timer"))
+                .order(Order::Foreground)
+                .pivot(Align2::RIGHT_TOP)
+                .fixed_pos(c.right_top() + vec2(-14.0, 14.0))
+                .show(ctx, |ui| {
+                    Frame::popup(ui.style())
+                        .corner_radius(14)
+                        .inner_margin(Margin::symmetric(10, 6))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let t = self.timer.seconds(self.now) as u64;
+                                ui.label(
+                                    RichText::new(format!(
+                                        "⏱ {:02}:{:02}:{:02}",
+                                        t / 3600,
+                                        t / 60 % 60,
+                                        t % 60
+                                    ))
+                                    .monospace()
+                                    .size(15.0),
+                                );
+                                let running = self.timer.since.is_some();
+                                if ui.button(if running { "Pause" } else { "Start" }).clicked() {
+                                    if let Some(s) = self.timer.since.take() {
+                                        self.timer.acc += self.now - s;
+                                    } else {
+                                        self.timer.since = Some(self.now);
+                                    }
+                                }
+                                if ui.button("Reset").clicked() {
+                                    self.timer = Timer::default();
+                                }
+                                if running {
+                                    ui.ctx().request_repaint_after(
+                                        std::time::Duration::from_millis(250),
+                                    );
+                                }
+                            });
+                        });
+                });
+        }
+        let _ = pal;
     }
 
     pub fn fit_zoom(&self) -> f32 {
@@ -403,7 +500,13 @@ impl Editor {
         }
         let a = self.popover_anchor;
         let (pos, pivot) = match self.popover {
-            Popover::More => (a.left_bottom() + vec2(a.width(), 6.0), Align2::RIGHT_TOP),
+            Popover::More | Popover::Customize | Popover::Template => {
+                (a.left_bottom() + vec2(a.width(), 6.0), Align2::RIGHT_TOP)
+            }
+            Popover::GoTo => (a.left_top() - vec2(0.0, 8.0), Align2::LEFT_BOTTOM),
+            Popover::ShapeStyle | Popover::MoveToLayer => {
+                (a.left_bottom() + vec2(0.0, 6.0), Align2::LEFT_TOP)
+            }
             _ => (pos2(a.right() + 10.0, a.top() - 8.0), Align2::LEFT_TOP),
         };
         let resp = egui::Area::new(EId::unique("editor-popover"))
@@ -417,15 +520,25 @@ impl Editor {
                     .inner_margin(14)
                     .fill(pal.raised)
                     .show(ui, |ui| {
-                        ui.set_width(300.0);
-                        match self.popover {
-                            Popover::ToolSettings(t) => self.tool_panel(ui, t, prefs, pal),
-                            Popover::Color => self.color_panel(ui, prefs, pal),
-                            Popover::Insert => self.insert_menu(ui, clipboard),
-                            Popover::More => self.more_menu(ui, prefs),
-                            Popover::Template => self.template_panel(ui, prefs, pal),
-                            Popover::None => {}
-                        }
+                        ui.set_width(if self.popover == Popover::GoTo { 200.0 } else { 300.0 });
+                        let max_h = (ctx.content_rect().height() - 80.0).max(200.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(max_h)
+                            .min_scrolled_height(max_h)
+                            .show(ui, |ui| match self.popover {
+                                Popover::ToolSettings(t) => self.tool_panel(ui, t, prefs, pal),
+                                Popover::Color => self.color_panel(ui, prefs, pal),
+                                Popover::Insert => self.insert_menu(ui, prefs, clipboard),
+                                Popover::More => self.more_menu(ui, prefs),
+                                Popover::Template => self.template_panel(ui, prefs, pal),
+                                Popover::Shapes => self.shapes_panel(ui, prefs, pal),
+                                Popover::Stickers => self.stickers_panel(ui, prefs, pal),
+                                Popover::ShapeStyle => self.shape_style_panel(ui, prefs, pal),
+                                Popover::MoveToLayer => self.move_to_layer_panel(ui),
+                                Popover::Customize => self.customize_panel(ui, prefs),
+                                Popover::GoTo => self.goto_panel(ui),
+                                Popover::None => {}
+                            });
                     });
             })
             .response;
@@ -586,6 +699,9 @@ impl Editor {
                     ui.add(egui::Slider::new(&mut prefs.eraser_size, 4.0..=60.0).show_value(false));
                 });
                 toggle_row(ui, "Erase highlighter only", &mut prefs.eraser_hl_only);
+                toggle_row(ui, "Erase shapes", &mut prefs.eraser_shapes);
+                toggle_row(ui, "Erase tape", &mut prefs.eraser_tapes);
+                toggle_row(ui, "Return to previous tool", &mut prefs.eraser_return);
                 ui.add_space(4.0);
                 if ui
                     .button(RichText::new("Clear this page").color(pal.danger))
@@ -598,10 +714,94 @@ impl Editor {
             Tool::Lasso => {
                 ui.vertical_centered(|ui| ui.heading(RichText::new("Lasso").size(18.0)));
                 ui.label(RichText::new("Circle ink, shapes or text to move, resize, recolour, copy or delete it. Tap an item to pick it alone.").color(pal.muted));
+                section(ui, "Shape", pal);
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(!prefs.lasso_rect, "Freeform").clicked() {
+                        prefs.lasso_rect = false;
+                    }
+                    if ui.selectable_label(prefs.lasso_rect, "Rectangle").clicked() {
+                        prefs.lasso_rect = true;
+                    }
+                });
+                section(ui, "Object selection", pal);
+                toggle_row(ui, "Handwriting", &mut prefs.lasso_ink);
+                toggle_row(ui, "Highlights", &mut prefs.lasso_hl);
+                toggle_row(ui, "Text boxes", &mut prefs.lasso_text);
+                toggle_row(ui, "Images", &mut prefs.lasso_images);
+                toggle_row(ui, "Shapes", &mut prefs.lasso_shapes);
+                toggle_row(ui, "Tapes", &mut prefs.lasso_tapes);
                 if ui.button("Select everything on this page").clicked() {
                     self.select_all();
                     self.popover = Popover::None;
                 }
+            }
+            Tool::Tape => {
+                ui.vertical_centered(|ui| ui.heading(RichText::new("Tape").size(18.0)));
+                section(ui, "Tape type", pal);
+                ui.horizontal(|ui| {
+                    for (k, name) in [
+                        (TapeKind::Line, "Straight"),
+                        (TapeKind::Rect, "Rectangle"),
+                        (TapeKind::Free, "Freehand"),
+                    ] {
+                        if ui.selectable_label(prefs.tape_kind == k, name).clicked() {
+                            prefs.tape_kind = k;
+                        }
+                    }
+                });
+                if prefs.tape_kind != TapeKind::Rect {
+                    section(ui, "Size", pal);
+                    Self::size_row(ui, &TAPE_SIZES_MM, &mut prefs.tape_mm, pal);
+                }
+                section(ui, "Pattern", pal);
+                ui.horizontal(|ui| {
+                    for hex in TAPE_COLORS {
+                        let c = Rgba::from_hex(hex).unwrap_or(Rgba::WHITE);
+                        let (r, resp) = ui.allocate_exact_size(vec2(62.0, 30.0), Sense::click());
+                        ui.painter().rect_filled(r.shrink(3.0), 12.0, c32(c));
+                        for k in 0..6 {
+                            let x = r.left() + 8.0 + k as f32 * 9.0;
+                            ui.painter().line_segment(
+                                [pos2(x, r.bottom() - 6.0), pos2(x + 6.0, r.top() + 6.0)],
+                                EStroke::new(1.5, Color32::WHITE.gamma_multiply(0.5)),
+                            );
+                        }
+                        if prefs.tape_color == c {
+                            ui.painter().rect_stroke(
+                                r,
+                                14.0,
+                                EStroke::new(2.0, pal.accent),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                        if resp.clicked() {
+                            prefs.tape_color = c;
+                        }
+                    }
+                });
+                ui.add_space(6.0);
+                Frame::new()
+                    .fill(pal.hover)
+                    .corner_radius(10)
+                    .inner_margin(8)
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(
+                                "💡 Cover your notes with tape, then test yourself. Tap a tape to reveal it.",
+                            )
+                            .color(pal.muted)
+                            .size(13.0),
+                        );
+                    });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cover all").clicked() {
+                        self.set_all_tapes(false);
+                    }
+                    if ui.button("Reveal all").clicked() {
+                        self.set_all_tapes(true);
+                    }
+                });
             }
             Tool::Shape => {
                 ui.vertical_centered(|ui| ui.heading(RichText::new("Shapes").size(18.0)));
@@ -667,8 +867,10 @@ impl Editor {
             Tool::Hand => {
                 ui.vertical_centered(|ui| ui.heading(RichText::new("Hand").size(18.0)));
                 ui.label(
-                    RichText::new("Scroll pages with the Pencil or mouse without writing.")
-                        .color(pal.muted),
+                    RichText::new(
+                        "Scroll pages with the Pencil or mouse without writing. Tap links to follow them and tape to reveal it.",
+                    )
+                    .color(pal.muted),
                 );
             }
         }
@@ -677,6 +879,7 @@ impl Editor {
     fn color_panel(&mut self, ui: &mut Ui, prefs: &mut Prefs, pal: &Palette) {
         let target: &mut Rgba = match self.tool {
             Tool::Highlighter => &mut prefs.hl_color,
+            Tool::Tape => &mut prefs.tape_color,
             Tool::Shape => &mut prefs.shape_color,
             Tool::Text => &mut prefs.text_color,
             Tool::Laser => &mut prefs.laser_color,
@@ -702,6 +905,7 @@ impl Editor {
         if let Some(c) = swatch_row(ui, favs, chosen, pal, true) {
             match self.tool {
                 Tool::Highlighter => prefs.hl_color = c,
+                Tool::Tape => prefs.tape_color = c,
                 Tool::Shape => prefs.shape_color = c,
                 Tool::Text => prefs.text_color = c,
                 Tool::Laser => prefs.laser_color = c,
@@ -718,34 +922,296 @@ impl Editor {
         }
     }
 
-    fn insert_menu(&mut self, ui: &mut Ui, clipboard: &mut Vec<Item>) {
+    fn insert_menu(&mut self, ui: &mut Ui, prefs: &mut Prefs, clipboard: &mut Vec<Item>) {
         ui.label(RichText::new("Insert").strong());
-        if ui.button("New page after this one").clicked() {
+        let full = ui.available_width();
+        let wide = |t: &str| egui::Button::new(t).min_size(vec2(full, 30.0));
+        if ui.add(wide("📄  Page after this one")).clicked() {
             self.insert_page(self.current);
             self.popover = Popover::None;
         }
-        if ui.button("Text box").clicked() {
+        if ui.add(wide("🖼  Image…")).clicked() {
+            if crate::platform::pick_file(crate::platform::ACCEPT_IMAGE) {
+                self.pending_import = Some(ImportTarget::Image);
+            } else {
+                self.toast("Importing pictures works in the web version");
+            }
+            self.popover = Popover::None;
+        }
+        if ui.add(wide("📥  Import PDF or photo as pages…")).clicked() {
+            if crate::platform::pick_file(crate::platform::ACCEPT_ANY) {
+                self.pending_import = Some(ImportTarget::Pages);
+            } else {
+                self.toast("Importing files works in the web version");
+            }
+            self.popover = Popover::None;
+        }
+        if ui.add(wide("T  Text box")).clicked() {
             self.set_tool(Tool::Text);
-            let c = self.visible_center(self.current);
-            let prefs_size = 16.0;
-            let _ = prefs_size;
             self.popover = Popover::None;
             self.toast("Tap the page where the text should go");
-            let _ = c;
         }
-        if ui.button("Shapes").clicked() {
-            self.set_tool(Tool::Shape);
-            self.popover = Popover::None;
+        if ui.add(wide("◆  Shape…")).clicked() {
+            self.popover = Popover::Shapes;
         }
-        if ui.button("Ruler").clicked() {
+        if ui.add(wide("★  Sticker…")).clicked() {
+            self.popover = Popover::Stickers;
+        }
+        if ui.add(wide("📏  Ruler")).clicked() {
             self.toggle_ruler();
             self.popover = Popover::None;
         }
         if ui
-            .add_enabled(!clipboard.is_empty(), egui::Button::new("Paste"))
+            .add_enabled(!clipboard.is_empty(), wide("📋  Paste"))
             .clicked()
         {
             self.paste(clipboard);
+            self.popover = Popover::None;
+        }
+        let _ = prefs;
+    }
+
+    fn shapes_panel(&mut self, ui: &mut Ui, prefs: &mut Prefs, pal: &Palette) {
+        ui.vertical_centered(|ui| ui.heading(RichText::new("Insert Shape").size(18.0)));
+        egui::Grid::new("shape-grid")
+            .spacing(vec2(6.0, 6.0))
+            .show(ui, |ui| {
+                for (i, p) in Preset::ALL.iter().enumerate() {
+                    let (r, resp) = ui.allocate_exact_size(vec2(88.0, 70.0), Sense::click());
+                    if resp.hovered() {
+                        ui.painter().rect_filled(r, 10.0, pal.hover);
+                    }
+                    let item = presets::preset_item(*p, 0.0, 0.0, 48.0, prefs.fill_color);
+                    let m = super::mesh::item_mesh(&item, Paper::White);
+                    ui.painter().add(place(&m, r.center(), 1.0));
+                    if resp.on_hover_text(p.name()).clicked() {
+                        let page = self.current;
+                        if !self.can_write(page) {
+                            self.toast("The active layer is locked or hidden");
+                        } else {
+                            let c = self.visible_center(page);
+                            let it = presets::preset_item(*p, c[0], c[1], 120.0, prefs.fill_color);
+                            self.add_items(page, vec![it]);
+                        }
+                        self.popover = Popover::None;
+                    }
+                    if i % 3 == 2 {
+                        ui.end_row();
+                    }
+                }
+            });
+        section(ui, "Colour", pal);
+        let cur = prefs.fill_color;
+        if let Some(c) = palette_grid(ui, cur, pal) {
+            prefs.fill_color = c;
+        }
+    }
+
+    fn stickers_panel(&mut self, ui: &mut Ui, prefs: &mut Prefs, pal: &Palette) {
+        ui.horizontal(|ui| {
+            ui.heading(RichText::new("Stickers").size(18.0));
+        });
+        if prefs.stickers.is_empty() {
+            ui.label(
+                RichText::new(
+                    "No stickers yet. Use the Lasso to select something, then choose More ▾ › Save as sticker.",
+                )
+                .color(pal.muted),
+            );
+        }
+        let mut place_it = None;
+        let mut remove = None;
+        egui::Grid::new("sticker-grid")
+            .spacing(vec2(6.0, 6.0))
+            .show(ui, |ui| {
+                for (i, st) in prefs.stickers.iter().enumerate() {
+                    let (r, resp) = ui.allocate_exact_size(vec2(88.0, 80.0), Sense::click());
+                    ui.painter().rect_filled(r, 10.0, if resp.hovered() { pal.hover } else { pal.bg });
+                    if let Some(b) = geom::union_bbox(st.items.iter()) {
+                        let k = (70.0 / b.w.max(b.h).max(1.0)).min(1.5);
+                        let origin = r.center() - vec2(b.center()[0], b.center()[1]) * k;
+                        for it in &st.items {
+                            if let Content::Text(t) = &it.content {
+                                let pos = origin + vec2(t.x, t.y) * k;
+                                ui.painter().text(
+                                    pos,
+                                    Align2::LEFT_TOP,
+                                    &t.text,
+                                    egui::FontId::proportional((t.size * k).max(6.0)),
+                                    c32(t.color),
+                                );
+                            } else {
+                                let m = super::mesh::item_mesh(it, Paper::White);
+                                ui.painter().add(place(&m, origin, k));
+                            }
+                        }
+                    }
+                    if resp.clicked() {
+                        place_it = Some(i);
+                    }
+                    resp.context_menu(|ui| {
+                        if ui.button("Delete sticker").clicked() {
+                            remove = Some(i);
+                            ui.close();
+                        }
+                    });
+                    if i % 3 == 2 {
+                        ui.end_row();
+                    }
+                }
+            });
+        if let Some(i) = remove {
+            prefs.stickers.remove(i);
+        }
+        if let Some(i) = place_it {
+            let mut st = prefs.stickers.remove(i);
+            st.used = now_ms();
+            self.place_sticker(&st);
+            prefs.stickers.insert(0, st);
+            self.popover = Popover::None;
+        }
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button("Install samples").clicked() {
+                let mut samples = presets::sample_stickers();
+                samples.append(&mut prefs.stickers);
+                prefs.stickers = samples;
+                prefs.stickers.truncate(40);
+            }
+            ui.label(RichText::new("Right-click / long-press to delete").color(pal.muted).size(12.0));
+        });
+    }
+
+    fn shape_style_panel(&mut self, ui: &mut Ui, prefs: &mut Prefs, pal: &Palette) {
+        ui.vertical_centered(|ui| ui.heading(RichText::new("Shape Style").size(18.0)));
+        let first = self.selected_items().into_iter().find_map(|i| match &i.content {
+            Content::Shape(s) => Some(s.clone()),
+            _ => None,
+        });
+        let Some(cur) = first else {
+            ui.label("Select a shape first.");
+            return;
+        };
+        let apply = |ed: &mut Editor, f: &dyn Fn(&mut Shape)| {
+            ed.map_selection(|it| {
+                let mut c = it.clone();
+                if let Content::Shape(s) = &mut c.content {
+                    f(s);
+                }
+                c
+            });
+        };
+        section(ui, "Colour", pal);
+        if let Some(c) = palette_grid(ui, cur.color, pal) {
+            apply(self, &|s: &mut Shape| {
+                s.color = c;
+                if s.fill.is_some() {
+                    s.fill = Some(c);
+                }
+            });
+            prefs.fill_color = c;
+        }
+        section(ui, "Fill", pal);
+        ui.horizontal(|ui| {
+            let mode = if cur.fill.is_none() { 0 } else if cur.solid { 2 } else { 1 };
+            for (k, name) in ["Outline", "Tinted", "Filled"].iter().enumerate() {
+                if ui.selectable_label(mode == k, *name).clicked() {
+                    apply(self, &|s: &mut Shape| {
+                        s.fill = (k > 0).then_some(s.color);
+                        s.solid = k == 2;
+                    });
+                }
+            }
+        });
+        section(ui, "Border", pal);
+        ui.horizontal(|ui| {
+            let mode = if !cur.dashed { 0 } else if cur.dotted { 2 } else { 1 };
+            for (k, name) in ["Solid", "Dashed", "Dotted"].iter().enumerate() {
+                if ui.selectable_label(mode == k, *name).clicked() {
+                    apply(self, &|s: &mut Shape| {
+                        s.dashed = k > 0;
+                        s.dotted = k == 2;
+                    });
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            for (w, name) in [(0.6, "Thin"), (1.5, "Medium"), (3.0, "Thick"), (5.0, "Heavy")] {
+                if ui
+                    .selectable_label((cur.width - w).abs() < 0.05, name)
+                    .clicked()
+                {
+                    apply(self, &|s: &mut Shape| s.width = w);
+                }
+            }
+        });
+    }
+
+    fn move_to_layer_panel(&mut self, ui: &mut Ui) {
+        ui.label(RichText::new("Move to layer").strong());
+        let Some(sel) = self.selection.clone() else {
+            ui.label("Nothing selected.");
+            return;
+        };
+        let layers = self.doc.pages[sel.page].layers.clone();
+        for l in layers.iter().rev() {
+            let label = if l.locked {
+                format!("{} 🔒", l.name)
+            } else {
+                l.name.clone()
+            };
+            if ui
+                .add_enabled(!l.locked, egui::Button::new(label).min_size(vec2(260.0, 28.0)))
+                .clicked()
+            {
+                self.move_selection_to_layer(l.id);
+                self.popover = Popover::None;
+            }
+        }
+    }
+
+    fn customize_panel(&mut self, ui: &mut Ui, prefs: &mut Prefs) {
+        ui.label(RichText::new("Customize toolbar").strong());
+        for name in TOOL_NAMES {
+            let mut on = prefs.tool_visible(name);
+            if toggle_row(ui, name, &mut on) {
+                prefs.hidden_tools.retain(|t| t != name);
+                if !on {
+                    prefs.hidden_tools.push(name.to_string());
+                }
+            }
+        }
+        if ui.button("Reset").clicked() {
+            prefs.hidden_tools.clear();
+        }
+    }
+
+    fn goto_panel(&mut self, ui: &mut Ui) {
+        ui.label(RichText::new("Go to page").strong());
+        let n = self.doc.pages.len();
+        let mut go = ui.input(|i| i.key_pressed(Key::Enter));
+        ui.horizontal(|ui| {
+            let r = ui.add(egui::TextEdit::singleline(&mut self.goto_text).desired_width(70.0));
+            r.request_focus();
+            ui.label(format!("of {n}"));
+            if ui.button("Go").clicked() {
+                go = true;
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.button("First").clicked() {
+                self.goto_text = "1".into();
+                go = true;
+            }
+            if ui.button("Last").clicked() {
+                self.goto_text = n.to_string();
+                go = true;
+            }
+        });
+        if go {
+            if let Ok(k) = self.goto_text.trim().parse::<usize>() {
+                self.scroll_to = Some(k.clamp(1, n) - 1);
+            }
             self.popover = Popover::None;
         }
     }
@@ -796,8 +1262,31 @@ impl Editor {
             self.delete_page(i);
             self.popover = Popover::None;
         }
+        if ui.button("Add to outline").clicked() {
+            self.add_outline();
+            self.popover = Popover::None;
+        }
+        if ui.button("Clear page…").clicked() {
+            self.clear_page(i);
+            self.toast("Page cleared (undo to restore)");
+            self.popover = Popover::None;
+        }
         ui.separator();
         ui.label(RichText::new("Notebook").strong());
+        ui.horizontal(|ui| {
+            if ui.button("🔍 Find…").clicked() {
+                self.edit = Some(EditDialog::Find(String::new()));
+                self.popover = Popover::None;
+            }
+            if ui.button("Go to page…").clicked() {
+                self.goto_text = (self.current + 1).to_string();
+                self.popover = Popover::GoTo;
+                self.popover_anchor = Rect::from_center_size(
+                    self.canvas.left_bottom() + vec2(60.0, -30.0),
+                    vec2(10.0, 10.0),
+                );
+            }
+        });
         if ui.button("Rename…").clicked() {
             self.rename = Some(self.title.clone());
             self.popover = Popover::None;
@@ -811,6 +1300,14 @@ impl Editor {
             self.popover = Popover::None;
         }
         ui.separator();
+        ui.label(RichText::new("View").strong());
+        toggle_row(ui, "Night mode (dark pages)", &mut prefs.night_mode);
+        toggle_row(ui, "Study timer", &mut prefs.show_timer);
+        if toggle_row(ui, "Keep screen awake", &mut prefs.keep_awake) {
+            crate::platform::keep_awake(prefs.keep_awake);
+        }
+        toggle_row(ui, "Dark interface", &mut prefs.dark_ui);
+        ui.separator();
         ui.label(RichText::new("Settings").strong());
         toggle_row(
             ui,
@@ -819,7 +1316,9 @@ impl Editor {
         );
         toggle_row(ui, "Two-finger tap to undo", &mut prefs.two_finger_undo);
         toggle_row(ui, "Hold to draw shapes", &mut prefs.shape_hold);
-        toggle_row(ui, "Dark interface", &mut prefs.dark_ui);
+        if ui.button("Customize toolbar…").clicked() {
+            self.popover = Popover::Customize;
+        }
     }
 
     fn template_panel(&mut self, ui: &mut Ui, prefs: &mut Prefs, pal: &Palette) {
@@ -827,20 +1326,19 @@ impl Editor {
         let (mut t, mut p) = (cur.template, cur.paper);
         ui.label(RichText::new("Template").strong());
         let mut changed = textures::template_picker(ui, &mut t, p, pal);
-        ui.label(RichText::new("Paper").strong());
-        ui.horizontal(|ui| {
+        ui.label(RichText::new("Background colour").strong());
+        ui.horizontal_wrapped(|ui| {
             for paper in Paper::ALL {
-                let (r, resp) = ui.allocate_exact_size(vec2(56.0, 40.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::click());
                 ui.painter()
-                    .rect_filled(r.shrink(3.0), 8.0, c32(paper.background()));
-                ui.painter().rect_stroke(
-                    r.shrink(3.0),
-                    8.0,
+                    .circle_filled(r.center(), 15.0, c32(paper.background()));
+                ui.painter().circle_stroke(
+                    r.center(),
+                    if p == paper { 17.5 } else { 15.0 },
                     EStroke::new(
                         if p == paper { 2.5 } else { 1.0 },
                         if p == paper { pal.accent } else { pal.line },
                     ),
-                    egui::StrokeKind::Inside,
                 );
                 if resp.on_hover_text(paper.name()).clicked() {
                     p = paper;
@@ -866,6 +1364,36 @@ impl Editor {
                 self.toast("Saved as default paper");
             }
         });
+        ui.add_space(4.0);
+        ui.label(RichText::new("Paper size").strong());
+        let (cw, ch) = {
+            let c = &self.doc.pages[self.current];
+            (c.w, c.h)
+        };
+        let mut picked = None;
+        ui.horizontal_wrapped(|ui| {
+            for size in PaperSize::ALL {
+                let (w, h) = size.dims(cw > ch);
+                let on = (w - cw).abs() < 1.0 && (h - ch).abs() < 1.0;
+                if ui.selectable_label(on, size.name()).clicked() {
+                    picked = Some((w, h));
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.selectable_label(cw <= ch, "Portrait").clicked() && cw > ch {
+                picked = Some((ch, cw));
+            }
+            if ui.selectable_label(cw > ch, "Landscape").clicked() && cw <= ch {
+                picked = Some((ch, cw));
+            }
+        });
+        let mut all = ui.ctx().data(|d| d.get_temp::<bool>(EId::unique("size-all")).unwrap_or(false));
+        ui.checkbox(&mut all, "Apply size to all pages");
+        ui.ctx().data_mut(|d| d.insert_temp(EId::unique("size-all"), all));
+        if let Some((w, h)) = picked {
+            self.set_page_size(w, h, all);
+        }
         let _ = CornerRadius::ZERO;
         let _ = Color32::WHITE;
     }
@@ -929,10 +1457,172 @@ impl Editor {
                 self.bookmark_edit = Some((i, name));
             }
         }
+        if let Some(edit) = self.edit.take() {
+            self.edit_dialog(ctx, edit);
+        }
+    }
+
+    fn edit_dialog(&mut self, ctx: &egui::Context, mut edit: EditDialog) {
+        let mut keep = true;
+        // Read Enter before any text field gets a chance to swallow it.
+        let enter = ctx.input(|i| i.key_pressed(Key::Enter));
+        egui::Modal::new(EId::unique("edit-dialog")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            match &mut edit {
+                EditDialog::Link { url, page, web } => {
+                    ui.heading("Link Settings");
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(*web, "Web page").clicked() {
+                            *web = true;
+                        }
+                        if ui.selectable_label(!*web, "Page in this notebook").clicked() {
+                            *web = false;
+                        }
+                    });
+                    if *web {
+                        let r = ui.add(
+                            egui::TextEdit::singleline(url)
+                                .hint_text("https://example.com")
+                                .desired_width(f32::INFINITY),
+                        );
+                        r.request_focus();
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.label("Page number");
+                            let r = ui.add(egui::TextEdit::singleline(page).desired_width(60.0));
+                            r.request_focus();
+                            ui.label(format!("of {}", self.doc.pages.len()));
+                        });
+                    }
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                        if ui
+                            .button(RichText::new("Remove link").color(Color32::from_rgb(255, 69, 58)))
+                            .clicked()
+                        {
+                            self.set_selection_link(None);
+                            keep = false;
+                        }
+                        if ui.button("Save").clicked() || enter {
+                            let link = if *web {
+                                let u = url.trim();
+                                (!u.is_empty()).then(|| {
+                                    if u.contains("://") || u.starts_with("mailto:") {
+                                        u.to_string()
+                                    } else {
+                                        format!("https://{u}")
+                                    }
+                                })
+                                .map(Link::Url)
+                            } else {
+                                page.trim()
+                                    .parse::<usize>()
+                                    .ok()
+                                    .filter(|k| *k >= 1 && *k <= self.doc.pages.len())
+                                    .map(|k| Link::Page(self.doc.pages[k - 1].id))
+                            };
+                            match link {
+                                Some(l) => {
+                                    self.set_selection_link(Some(l));
+                                    self.toast("Link added. Tap it with a finger or the Hand tool.");
+                                    keep = false;
+                                }
+                                None => self.toast("Enter a web address or a valid page number"),
+                            }
+                        }
+                    });
+                }
+                EditDialog::LayerName(page, id, name) => {
+                    ui.heading("Rename layer");
+                    let r = ui.text_edit_singleline(name);
+                    r.request_focus();
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                        if ui.button("Save").clicked() || enter {
+                            let n = name.trim().to_string();
+                            if !n.is_empty() && *page < self.doc.pages.len() {
+                                self.update_layer(*page, *id, |l| l.name = n);
+                            }
+                            keep = false;
+                        }
+                    });
+                }
+                EditDialog::OutlineTitle(id, title) => {
+                    ui.heading("Outline entry");
+                    let r = ui.text_edit_singleline(title);
+                    r.request_focus();
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                        if ui.button("Save").clicked() || enter {
+                            let t = title.trim().to_string();
+                            if !t.is_empty()
+                                && let Some(e) = self.doc.outline.iter_mut().find(|e| e.id == *id)
+                            {
+                                e.title = t;
+                                self.touch();
+                            }
+                            keep = false;
+                        }
+                    });
+                }
+                EditDialog::Find(q) => {
+                    ui.horizontal(|ui| {
+                        ui.heading("Find in notebook");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.button("Done").clicked() {
+                                keep = false;
+                            }
+                        });
+                    });
+                    let r = ui.add(
+                        egui::TextEdit::singleline(q)
+                            .hint_text("Typed text, bookmarks, outline")
+                            .desired_width(f32::INFINITY),
+                    );
+                    r.request_focus();
+                    let hits = self.find(q);
+                    if !q.trim().is_empty() {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} match{} found",
+                                hits.len(),
+                                if hits.len() == 1 { "" } else { "es" }
+                            ))
+                            .weak(),
+                        );
+                    }
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for (page, snippet) in hits {
+                            let b = egui::Button::new(format!("p.{}   {snippet}", page + 1))
+                                .frame(false)
+                                .wrap();
+                            if ui.add(b).clicked() {
+                                self.scroll_to = Some(page);
+                                keep = false;
+                            }
+                        }
+                    });
+                    if ui.input(|i| i.key_pressed(Key::Escape)) {
+                        keep = false;
+                    }
+                }
+            }
+        });
+        if keep {
+            self.edit = Some(edit);
+        }
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context, prefs: &mut Prefs, clipboard: &mut Vec<Item>) {
-        if ctx.memory(|m| m.focused().is_some()) || self.text_edit.is_some() {
+        if ctx.memory(|m| m.focused().is_some()) || self.text_edit.is_some() || self.edit.is_some()
+        {
             return;
         }
         let (cmd, shift) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift));
@@ -952,6 +1642,19 @@ impl Editor {
             self.duplicate_selection();
         } else if cmd && pressed(Key::A) {
             self.select_all();
+        } else if cmd && pressed(Key::F) {
+            self.edit = Some(EditDialog::Find(String::new()));
+        } else if cmd && pressed(Key::G) {
+            self.goto_text = (self.current + 1).to_string();
+            self.popover = Popover::GoTo;
+            self.popover_anchor =
+                Rect::from_center_size(self.canvas.left_bottom() + vec2(60.0, -30.0), vec2(10.0, 10.0));
+        } else if cmd && pressed(Key::OpenBracket) {
+            self.go_back();
+        } else if cmd && pressed(Key::Num0) {
+            let page = self.current;
+            self.fit_width();
+            self.scroll_to_page(page);
         } else if !cmd {
             if pressed(Key::Delete) || pressed(Key::Backspace) {
                 self.delete_selection();
@@ -961,16 +1664,58 @@ impl Editor {
                 self.popover = Popover::None;
                 self.fullscreen = false;
             }
+            // Noteful-style keys (F G E A H T) plus the older P L S.
             for (k, t) in [
+                (Key::F, Tool::Pen),
                 (Key::P, Tool::Pen),
-                (Key::H, Tool::Highlighter),
+                (Key::G, Tool::Highlighter),
                 (Key::E, Tool::Eraser),
+                (Key::A, Tool::Lasso),
                 (Key::L, Tool::Lasso),
+                (Key::H, Tool::Hand),
                 (Key::S, Tool::Shape),
                 (Key::T, Tool::Text),
+                (Key::K, Tool::Tape),
             ] {
                 if pressed(k) {
                     self.set_tool(t);
+                }
+            }
+            // 1–9: pen favourites (colours).
+            let nums = [
+                Key::Num1,
+                Key::Num2,
+                Key::Num3,
+                Key::Num4,
+                Key::Num5,
+                Key::Num6,
+                Key::Num7,
+                Key::Num8,
+                Key::Num9,
+            ];
+            for (n, k) in nums.iter().enumerate() {
+                if pressed(*k)
+                    && let Some(c) = prefs.swatches.get(n).copied()
+                {
+                    prefs.pen_color = c;
+                    self.set_tool(Tool::Pen);
+                }
+            }
+            if pressed(Key::OpenBracket) || pressed(Key::CloseBracket) {
+                // Previous / next layer on the current page.
+                let page = self.current;
+                let layers: Vec<Id> = self.doc.pages[page].layers.iter().map(|l| l.id).collect();
+                let cur = self.active_layer_id(page);
+                if let Some(pos) = layers.iter().position(|l| *l == cur) {
+                    let to = if pressed(Key::CloseBracket) {
+                        (pos + 1).min(layers.len() - 1)
+                    } else {
+                        pos.saturating_sub(1)
+                    };
+                    let pid = self.doc.pages[page].id;
+                    self.active_layer.insert(pid, layers[to]);
+                    let name = self.doc.pages[page].layers[to].name.clone();
+                    self.toast(format!("Drawing on {name}"));
                 }
             }
             if pressed(Key::Plus) || pressed(Key::Equals) {

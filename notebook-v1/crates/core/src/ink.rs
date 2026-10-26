@@ -2,8 +2,8 @@
 //! every sample; the width model is what gives each pen its feel. The same
 //! samples feed the GPU mesh, the thumbnail rasteriser and the PDF writer.
 
-use crate::geom::shape_outline;
-use crate::model::{Paper, PenKind, Rgba, Shape, ShapeKind, Stroke};
+use crate::geom::{shape_outline, tape_outline};
+use crate::model::{Paper, PenKind, Rgba, Shape, ShapeKind, Stroke, Tape};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sample {
@@ -168,7 +168,9 @@ pub fn shape_polylines(sh: &Shape) -> Vec<Vec<[f32; 2]>> {
     if closed {
         pts.push(pts[0]);
     }
-    let mut lines = if sh.dashed {
+    let mut lines = if sh.dashed && sh.dotted {
+        dash(&pts, 0.01, sh.width * 2.2)
+    } else if sh.dashed {
         dash(&pts, sh.width * 3.5, sh.width * 2.5)
     } else {
         vec![pts]
@@ -249,6 +251,39 @@ fn disc_segments(r: f32) -> usize {
     ((r * 2.5) as usize).clamp(10, 40)
 }
 
+/// Highlighter colour for see-through drawing (multiply / alpha) over pictures.
+pub fn highlight_tint(c: Rgba) -> Rgba {
+    c.mix_over(Rgba::WHITE, 0.55)
+}
+
+/// Ribbon without round caps or joins, so a translucent stroke never overlaps itself.
+pub fn ribbon_mesh(samples: &[Sample], out: &mut Mesh) {
+    if samples.len() < 2 {
+        ink_mesh(samples, out);
+        return;
+    }
+    let n = samples.len();
+    let base = out.verts.len() as u32;
+    for i in 0..n {
+        let a = samples[i.saturating_sub(1)];
+        let b = samples[(i + 1).min(n - 1)];
+        let (mut tx, mut ty) = (b.x - a.x, b.y - a.y);
+        let l = tx.hypot(ty).max(1e-6);
+        tx /= l;
+        ty /= l;
+        let (nx, ny) = (-ty, tx);
+        let s = samples[i];
+        let h = s.w / 2.0;
+        out.verts.push([s.x + nx * h, s.y + ny * h]);
+        out.verts.push([s.x - nx * h, s.y - ny * h]);
+        if i > 0 {
+            let k = base + (i as u32 - 1) * 2;
+            out.idx
+                .extend_from_slice(&[k, k + 1, k + 2, k + 1, k + 3, k + 2]);
+        }
+    }
+}
+
 /// Appends a variable-width ribbon with round ends and round corners.
 pub fn ink_mesh(samples: &[Sample], out: &mut Mesh) {
     match samples.len() {
@@ -312,16 +347,72 @@ pub fn shape_mesh(sh: &Shape, out: &mut Mesh) {
     }
 }
 
-/// Filled interior of a closed shape as a triangle fan (shapes are convex or near-convex).
+/// Filled interior of a closed shape as a fan around its centre. Works for convex
+/// shapes and for star-like ones (stars, bursts, clouds) whose centre sees every edge.
 pub fn shape_fill_mesh(sh: &Shape, out: &mut Mesh) {
     let (pts, closed) = shape_outline(sh);
     if !closed || pts.len() < 3 {
         return;
     }
+    fan(&pts, out);
+}
+
+pub fn fan(pts: &[[f32; 2]], out: &mut Mesh) {
+    let n = pts.len() as f32;
+    let c = pts
+        .iter()
+        .fold([0.0, 0.0], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n]);
     let base = out.verts.len() as u32;
-    out.verts.extend_from_slice(&pts);
-    for k in 1..pts.len() as u32 - 1 {
-        out.idx.extend_from_slice(&[base, base + k, base + k + 1]);
+    out.verts.push(c);
+    out.verts.extend_from_slice(pts);
+    let m = pts.len() as u32;
+    for k in 0..m {
+        out.idx
+            .extend_from_slice(&[base, base + 1 + k, base + 1 + (k + 1) % m]);
+    }
+}
+
+/// Body of a tape: a thick ribbon, or a filled rectangle.
+pub fn tape_mesh(t: &Tape, out: &mut Mesh) {
+    let (pts, closed) = tape_outline(t);
+    if closed {
+        fan(&pts, out);
+    } else {
+        ink_mesh(&polyline_samples(&pts, t.width), out);
+    }
+}
+
+/// Thin outline drawn where a revealed tape sits.
+pub fn tape_outline_mesh(t: &Tape, out: &mut Mesh) {
+    let (mut pts, closed) = tape_outline(t);
+    if closed {
+        if let Some(f) = pts.first().copied() {
+            pts.push(f);
+        }
+        for d in dash(&pts, 4.0, 3.0) {
+            ink_mesh(&polyline_samples(&d, 0.8), out);
+        }
+    } else {
+        // Outline both sides of the strip.
+        let n = pts.len();
+        if n < 2 {
+            return;
+        }
+        let h = t.width / 2.0;
+        for side in [-1.0f32, 1.0] {
+            let off: Vec<[f32; 2]> = (0..n)
+                .map(|i| {
+                    let a = pts[i.saturating_sub(1)];
+                    let b = pts[(i + 1).min(n - 1)];
+                    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                    let l = dx.hypot(dy).max(1e-6);
+                    [pts[i][0] - dy / l * h * side, pts[i][1] + dx / l * h * side]
+                })
+                .collect();
+            for d in dash(&off, 4.0, 3.0) {
+                ink_mesh(&polyline_samples(&d, 0.8), out);
+            }
+        }
     }
 }
 
@@ -373,14 +464,13 @@ mod tests {
 
     #[test]
     fn dashes_split_lines() {
-        let sh = Shape {
-            kind: ShapeKind::Line,
-            points: vec![[0.0, 0.0], [100.0, 0.0]],
-            color: Rgba::BLACK,
-            width: 2.0,
-            fill: None,
-            dashed: true,
-        };
+        let mut sh = Shape::new(
+            ShapeKind::Line,
+            vec![[0.0, 0.0], [100.0, 0.0]],
+            Rgba::BLACK,
+            2.0,
+        );
+        sh.dashed = true;
         assert!(shape_polylines(&sh).len() > 5);
     }
 }

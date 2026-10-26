@@ -1,6 +1,6 @@
 //! Draws the pages and everything on them, and hosts the text editor overlay.
 
-use super::mesh::{place, place_transformed, samples_mesh};
+use super::mesh::{place, place_transformed};
 use super::*;
 use crate::icons::{self, Icon};
 use crate::theme::{self, c32};
@@ -17,10 +17,10 @@ fn quantize(size: f32) -> f32 {
     2f32.powf((size.max(1.0).log2() * steps).round() / steps)
 }
 
-fn draw_text(p: &egui::Painter, origin: Pos2, zoom: f32, t: &TextBox) {
+fn draw_text(p: &egui::Painter, origin: Pos2, zoom: f32, t: &TextBox, paper: Paper) {
     let lh = t.size * text::LINE_HEIGHT;
     let fs = quantize(t.size * zoom);
-    let color = c32(t.color);
+    let color = c32(super::mesh::display_color(t.color, paper));
     for (i, line) in text::wrap(&t.text, t.size, t.w).iter().enumerate() {
         if line.is_empty() {
             continue;
@@ -42,6 +42,17 @@ impl Editor {
             self.fit_width();
             self.offset.y = 20.0;
             self.fitted = true;
+            self.fit_canvas_w = rect.width();
+        } else if (rect.width() - self.fit_canvas_w).abs() > 1.0 && rect.width() > 50.0 {
+            // The window or a side panel changed size: keep fitting the width if the
+            // page was fitted before.
+            let old_fit = ((self.fit_canvas_w - 32.0) / self.max_w).clamp(MIN_ZOOM, 2.2);
+            if (self.zoom - old_fit).abs() < 0.01 {
+                let page = self.current;
+                self.fit_width();
+                self.scroll_to_page(page);
+            }
+            self.fit_canvas_w = rect.width();
         }
         if let Some(i) = self.scroll_to.take()
             && i < self.doc.pages.len()
@@ -66,12 +77,19 @@ impl Editor {
             _ => None,
         };
 
+        let night = prefs.night_mode;
+        self.assets.begin_frame();
         for i in 0..self.doc.pages.len() {
             let pr = self.page_rect(i);
             if !pr.intersects(rect) {
                 continue;
             }
             let page = self.doc.pages[i].clone();
+            let paper = if night && !page.paper.is_dark() {
+                Paper::Night
+            } else {
+                page.paper
+            };
             painter.rect_filled(
                 pr.translate(vec2(0.0, 3.0)).expand(1.5),
                 3.0,
@@ -79,8 +97,29 @@ impl Editor {
             );
             let clip = pr.intersect(rect);
             let pp = painter.with_clip_rect(clip);
-            pp.rect_filled(pr, 0.0, c32(page.paper.background()));
-            pp.add(place(self.cache.paper(&page), pr.min, zoom));
+            pp.rect_filled(pr, 0.0, c32(paper.background()));
+            pp.add(place(self.cache.paper(&page, paper), pr.min, zoom));
+            if let Some(bg) = page.background {
+                match self.assets.texture(&ctx, bg) {
+                    Some(t) => {
+                        let tint = if night {
+                            Color32::from_gray(200)
+                        } else {
+                            Color32::WHITE
+                        };
+                        pp.image(t, pr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
+                    }
+                    None => {
+                        pp.text(
+                            pr.center(),
+                            Align2::CENTER_CENTER,
+                            "Loading page…",
+                            FontId::proportional(14.0),
+                            Color32::GRAY,
+                        );
+                    }
+                }
+            }
 
             let mut exclude: Vec<Id> = Vec::new();
             if let Some((mp, ids)) = &moving
@@ -94,16 +133,47 @@ impl Editor {
             {
                 exclude.push(id);
             }
-            let (hl, inkm) = self.cache.page(&page, &exclude);
-            let (hl, inkm) = (place(hl, pr.min, zoom), place(inkm, pr.min, zoom));
-            pp.add(hl);
-            pp.add(inkm);
-            for it in &page.items {
-                if let Content::Text(t) = &it.content
-                    && !exclude.contains(&it.id)
-                {
-                    draw_text(&pp, pr.min, zoom, t);
+            for layer in page.layers.iter().filter(|l| l.visible) {
+                for it in page.items_in_layer(layer.id) {
+                    if let Content::Image(im) = &it.content
+                        && !exclude.contains(&it.id)
+                    {
+                        let r = Rect::from_min_size(
+                            pr.min + vec2(im.x, im.y) * zoom,
+                            vec2(im.w, im.h) * zoom,
+                        );
+                        self.draw_picture(&pp, &ctx, im.asset, r);
+                    }
                 }
+                let (hl, inkm, tapes) = self.cache.layer(&page, layer.id, paper, &exclude);
+                let (hl, inkm, tapes) = (
+                    place(hl, pr.min, zoom),
+                    place(inkm, pr.min, zoom),
+                    place(tapes, pr.min, zoom),
+                );
+                pp.add(hl);
+                pp.add(inkm);
+                for it in page.items_in_layer(layer.id) {
+                    if let Content::Text(t) = &it.content
+                        && !exclude.contains(&it.id)
+                    {
+                        draw_text(&pp, pr.min, zoom, t, paper);
+                    }
+                }
+                pp.add(tapes);
+            }
+            // Small badge on linked items.
+            for it in page.items.iter().filter(|it| it.link.is_some() && page.visible(it)) {
+                let b = geom::item_bbox(it);
+                let c = pr.min + vec2(b.right(), b.y) * zoom;
+                pp.circle_filled(c, 9.0, pal.accent);
+                pp.text(
+                    c,
+                    Align2::CENTER_CENTER,
+                    "🔗",
+                    FontId::proportional(10.0),
+                    Color32::WHITE,
+                );
             }
 
             // Selection being moved or scaled: draw it transformed.
@@ -121,23 +191,30 @@ impl Editor {
                     _ => Box::new(|p| p),
                 };
                 for it in page.items.iter().filter(|it| ids.contains(&it.id)) {
+                    let moved = || match self.action {
+                        Action::Move { delta, .. } => geom::translate_item(it, delta[0], delta[1]),
+                        Action::Scale { anchor, factor, .. } => {
+                            geom::scale_item(it, anchor[0], anchor[1], factor)
+                        }
+                        _ => (**it).clone(),
+                    };
                     match &it.content {
                         Content::Text(_) => {
-                            let moved = match self.action {
-                                Action::Move { delta, .. } => {
-                                    geom::translate_item(it, delta[0], delta[1])
-                                }
-                                Action::Scale { anchor, factor, .. } => {
-                                    geom::scale_item(it, anchor[0], anchor[1], factor)
-                                }
-                                _ => (**it).clone(),
-                            };
-                            if let Content::Text(t) = &moved.content {
-                                draw_text(&pp, pr.min, zoom, t);
+                            if let Content::Text(t) = &moved().content {
+                                draw_text(&pp, pr.min, zoom, t, paper);
+                            }
+                        }
+                        Content::Image(_) => {
+                            if let Content::Image(im) = &moved().content {
+                                let r = Rect::from_min_size(
+                                    pr.min + vec2(im.x, im.y) * zoom,
+                                    vec2(im.w, im.h) * zoom,
+                                );
+                                self.draw_picture(&pp, &ctx, im.asset, r);
                             }
                         }
                         _ => {
-                            let m = self.cache.item(it, page.paper).clone();
+                            let m = self.cache.item(it, paper).clone();
                             pp.add(place_transformed(&m, pr.min, zoom, &f));
                         }
                     }
@@ -172,7 +249,7 @@ impl Editor {
                                         width: w,
                                         points: vec![],
                                     },
-                                    page.paper,
+                                    paper,
                                 )),
                                 &mut out,
                             );
@@ -180,7 +257,11 @@ impl Editor {
                         } else {
                             ink::shape_mesh(sh, &mut m);
                             let mut out = egui::Mesh::default();
-                            super::mesh::append(&m, c32(sh.color), &mut out);
+                            super::mesh::append(
+                                &m,
+                                c32(super::mesh::display_color(sh.color, paper)),
+                                &mut out,
+                            );
                             pp.add(place(&out, pr.min, zoom));
                         }
                     } else {
@@ -198,21 +279,38 @@ impl Editor {
                         if let (Some(edge), Some(r)) = (ruler_edge, self.ruler) {
                             st.points = self.project_preview(i, &st.points, r, *edge, width);
                         }
-                        let m =
-                            samples_mesh(&ink::samples(&st), c32(ink::ink_color(&st, page.paper)));
+                        let m = super::mesh::item_mesh_with(
+                            &Item::new(Content::Stroke(st)),
+                            paper,
+                            page.has_pictures(),
+                        );
                         pp.add(place(&m, pr.min, zoom));
                     }
                 }
                 Action::ShapeDrag { page: ap, a, b } if *ap == i => {
-                    let sh = Shape {
-                        kind: prefs.shape_kind,
-                        points: vec![*a, *b],
-                        color: prefs.shape_color,
-                        width: mm(prefs.shape_mm),
-                        fill: prefs.shape_fill.then_some(prefs.shape_color),
-                        dashed: prefs.shape_dashed,
+                    let mut sh = Shape::new(
+                        prefs.shape_kind,
+                        vec![*a, *b],
+                        prefs.shape_color,
+                        mm(prefs.shape_mm),
+                    );
+                    sh.fill = prefs.shape_fill.then_some(prefs.shape_color);
+                    sh.dashed = prefs.shape_dashed;
+                    let m = super::mesh::item_mesh(&Item::new(Content::Shape(sh)), paper);
+                    pp.add(place(&m, pr.min, zoom));
+                }
+                Action::TapeDraw { page: ap, pts } if *ap == i && pts.len() > 1 => {
+                    let t = Tape {
+                        points: match prefs.tape_kind {
+                            crate::prefs::TapeKind::Free => pts.clone(),
+                            _ => vec![pts[0], *pts.last().expect("len > 1")],
+                        },
+                        width: mm(prefs.tape_mm),
+                        color: prefs.tape_color,
+                        rect: prefs.tape_kind == crate::prefs::TapeKind::Rect,
+                        revealed: false,
                     };
-                    let m = super::mesh::item_mesh(&Item::new(Content::Shape(sh)), page.paper);
+                    let m = super::mesh::item_mesh(&Item::new(Content::Tape(t)), paper);
                     pp.add(place(&m, pr.min, zoom));
                 }
                 Action::Lasso { page: ap, pts } if *ap == i && pts.len() > 1 => {
@@ -251,6 +349,22 @@ impl Editor {
         }
     }
 
+    fn draw_picture(&mut self, p: &egui::Painter, ctx: &egui::Context, asset: Id, r: Rect) {
+        match self.assets.texture(ctx, asset) {
+            Some(t) => {
+                p.image(
+                    t,
+                    r,
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+            None => {
+                p.rect_filled(r, 2.0, Color32::from_gray(200));
+            }
+        }
+    }
+
     fn project_preview(
         &self,
         page: usize,
@@ -281,7 +395,7 @@ impl Editor {
         &mut self,
         painter: &egui::Painter,
         ctx: &egui::Context,
-        prefs: &Prefs,
+        prefs: &mut Prefs,
         clipboard: &mut Vec<Item>,
         pal: &theme::Palette,
     ) {
@@ -331,7 +445,7 @@ impl Editor {
             Color32::WHITE,
             EStroke::new(2.0, pal.accent),
         );
-        if !matches!(self.action, Action::Idle) {
+        if !matches!(self.action, Action::Idle) || self.edit.is_some() {
             return;
         }
 
@@ -373,12 +487,69 @@ impl Editor {
                             if icons::button(ui, Icon::Duplicate, false, "Duplicate").clicked() {
                                 self.duplicate_selection();
                             }
-                            if ui.button("Front").on_hover_text("Bring to front").clicked() {
-                                self.bring_to_front();
-                            }
                             if icons::button(ui, Icon::Trash, false, "Delete").clicked() {
                                 self.delete_selection();
                             }
+                            ui.separator();
+                            let more = ui.button("More ▾");
+                            egui::Popup::menu(&more).show(|ui| {
+                                ui.set_min_width(190.0);
+                                let has_shape = self
+                                    .selected_items()
+                                    .iter()
+                                    .any(|i| matches!(i.content, Content::Shape(_)));
+                                if ui
+                                    .add_enabled(has_shape, egui::Button::new("Shape style…"))
+                                    .clicked()
+                                {
+                                    self.popover = Popover::ShapeStyle;
+                                    self.popover_anchor = more.rect;
+                                }
+                                let link = self
+                                    .selected_items()
+                                    .first()
+                                    .and_then(|i| i.link.clone());
+                                if ui.button("🔗  Link…").clicked() {
+                                    let (url, page, web) = match &link {
+                                        Some(Link::Url(u)) => (u.clone(), String::new(), true),
+                                        Some(Link::Page(id)) => (
+                                            String::new(),
+                                            self.doc
+                                                .page_index(*id)
+                                                .map(|i| (i + 1).to_string())
+                                                .unwrap_or_default(),
+                                            false,
+                                        ),
+                                        None => (String::new(), String::new(), true),
+                                    };
+                                    self.edit = Some(EditDialog::Link { url, page, web });
+                                }
+                                if link.is_some() && ui.button("Follow link").clicked() {
+                                    if let Some(l) = link.clone() {
+                                        self.follow_link(&l);
+                                    }
+                                }
+                                if ui.button("★  Save as sticker").clicked() {
+                                    if let Some(st) = self.selection_as_sticker() {
+                                        prefs.stickers.insert(0, st);
+                                        prefs.stickers.truncate(40);
+                                        self.toast("Saved to Stickers");
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button("Bring to front").clicked() {
+                                    self.bring_to_front();
+                                }
+                                if ui.button("Send to back").clicked() {
+                                    self.send_to_back();
+                                }
+                                if self.doc.pages[sel.page].layers.len() > 1
+                                    && ui.button("Move to layer…").clicked()
+                                {
+                                    self.popover = Popover::MoveToLayer;
+                                    self.popover_anchor = more.rect;
+                                }
+                            });
                         });
                     });
             });

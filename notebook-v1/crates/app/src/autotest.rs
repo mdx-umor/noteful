@@ -188,6 +188,8 @@ pub fn step(app: &mut NotebookApp, ctx: &egui::Context) {
                 Content::Shape(s) => format!("shape {:?}", s.kind),
                 Content::Stroke(_) => "stroke".into(),
                 Content::Text(_) => "text".into(),
+                Content::Tape(_) => "tape".into(),
+                Content::Image(_) => "image".into(),
             });
             println!("after hold: last item = {last:?}");
             let snapped = ed.doc.pages[1].items.last().is_some_and(

@@ -11,7 +11,7 @@ use egui::{
 use notebook_core::library::{
     Filter, Folder, Library, NotebookMeta, SortBy, TagNode, normalize_tag,
 };
-use notebook_core::{Id, Paper, Rgba, Template, new_id, now_ms};
+use notebook_core::{Id, Paper, PaperSize, Rgba, Template, new_id, now_ms};
 use std::collections::{HashMap, HashSet};
 
 pub const COVERS: [&str; 8] = [
@@ -28,8 +28,11 @@ pub enum LibAction {
         paper: Paper,
         folder: Option<Id>,
         tags: Vec<String>,
+        size: (f32, f32),
     },
     QuickNote,
+    /// Pick a PDF or photo and make a notebook from it.
+    Import,
     Duplicate(Id),
     DeleteForever(Vec<Id>),
     EmptyTrash,
@@ -583,13 +586,22 @@ impl LibraryView {
             return;
         }
         let img = Rect::from_min_size(r.min, vec2(w, h));
+        let thumb = self.thumb(ui, m, thumbs, store);
         let p = ui.painter();
+        // Shadow under the actual page shape (landscape pages are shorter).
+        let shadow = match &thumb {
+            Some(t) => {
+                let ih = (w * t.size_vec2().y / t.size_vec2().x).min(h);
+                Rect::from_min_size(pos2(img.left(), img.bottom() - ih), vec2(w, ih))
+            }
+            None => img,
+        };
         p.rect_filled(
-            img.translate(vec2(0.0, 3.0)),
+            shadow.translate(vec2(0.0, 3.0)),
             8.0,
             Color32::from_black_alpha(90),
         );
-        match self.thumb(ui, m, thumbs, store) {
+        match thumb {
             Some(t) => {
                 let tex_size = t.size_vec2();
                 let ih = (w * tex_size.y / tex_size.x).min(h);
@@ -970,6 +982,10 @@ impl LibraryView {
                         actions.push(LibAction::QuickNote);
                         ui.close();
                     }
+                    if ui.button("Import PDF or photo…").clicked() {
+                        actions.push(LibAction::Import);
+                        ui.close();
+                    }
                     if ui.button("New folder").clicked() {
                         self.dialog = Some(Dialog::NewFolder(String::new()));
                         ui.close();
@@ -990,8 +1006,14 @@ impl LibraryView {
             return;
         };
         let mut keep = true;
+        let wide = matches!(dialog, Dialog::New { .. });
+        let max_h = (ctx.content_rect().height() - 100.0).max(300.0);
         let modal = egui::Modal::new(EId::unique("lib-dialog")).show(ctx, |ui| {
-            ui.set_width(420.0);
+            ui.set_width(if wide { 560.0 } else { 420.0 });
+            egui::ScrollArea::vertical()
+                .max_height(max_h)
+                .min_scrolled_height(max_h)
+                .show(ui, |ui| {
             let enter = ui.input(|i| i.key_pressed(Key::Enter));
             match &mut dialog {
                 Dialog::New {
@@ -1030,11 +1052,37 @@ impl LibraryView {
                         }
                     });
                     ui.label(RichText::new("Paper template").color(pal.muted));
-                    textures::template_picker(ui, template, *paper, pal);
-                    ui.horizontal(|ui| {
+                    textures::template_picker_cols(ui, template, *paper, pal, 6);
+                    ui.label(RichText::new("Background colour").color(pal.muted));
+                    ui.horizontal_wrapped(|ui| {
                         for p in Paper::ALL {
-                            ui.selectable_value(paper, p, p.name());
+                            let (r, resp) =
+                                ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
+                            ui.painter().circle_filled(r.center(), 13.0, c32(p.background()));
+                            ui.painter().circle_stroke(
+                                r.center(),
+                                if *paper == p { 16.0 } else { 13.0 },
+                                Stroke::new(
+                                    if *paper == p { 2.5 } else { 1.0 },
+                                    if *paper == p { pal.accent } else { pal.line },
+                                ),
+                            );
+                            if resp.on_hover_text(p.name()).clicked() {
+                                *paper = p;
+                            }
                         }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Paper size");
+                        egui::ComboBox::from_id_salt("nb-size")
+                            .selected_text(prefs.new_size.name())
+                            .show_ui(ui, |ui| {
+                                for sz in PaperSize::ALL {
+                                    ui.selectable_value(&mut prefs.new_size, sz, sz.name());
+                                }
+                            });
+                        ui.selectable_value(&mut prefs.new_landscape, false, "Portrait");
+                        ui.selectable_value(&mut prefs.new_landscape, true, "Landscape");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Folder");
@@ -1078,6 +1126,7 @@ impl LibraryView {
                                 paper: *paper,
                                 folder: *folder,
                                 tags,
+                                size: prefs.new_size.dims(prefs.new_landscape),
                             });
                             keep = false;
                         }
@@ -1313,6 +1362,7 @@ impl LibraryView {
                     });
                 }
             }
+            });
         });
         if modal.should_close() {
             keep = false;

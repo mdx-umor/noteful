@@ -26,6 +26,34 @@ sells as Pro is included for free, plus some extras.
 - Laser pointer for presenting (fades, never saved).
 - Unlimited undo/redo; **two-finger tap = undo, three-finger tap = redo**.
 
+**Study and organising (new)**
+- **Tape**: cover notes with striped washi tape (straight, rectangle or freehand,
+  4 patterns, 5 sizes). Tap a tape to reveal it; *Cover all* / *Reveal all*.
+- **Layers** per page: add, rename, hide (answer sheets), lock, reorder, duplicate,
+  merge down, move items between layers. `[` / `]` switch the active layer.
+- **Stickers**: save any lasso selection as a sticker; sample pack (quiz "?", "!",
+  stars, hearts, ticks, labels).
+- **Insert Shape** gallery: square, rounded, pill, circle, diamond, triangle, hexagon,
+  cloud, burst, star, heart, arrow. Shape style: outline / tinted / filled,
+  solid / dashed / dotted, four border sizes.
+- **Links** on any item: to a web page or a page in the notebook; a "↶ Page N" chip
+  takes you back.
+- **Outline** (table of contents) with indent / outdent, plus bookmarks.
+- **Pictures and PDFs** (web): insert photos, import a PDF or photo as pages, or
+  make a new notebook from a PDF (pages rendered with pdf.js). Highlighter stays
+  see-through on pictures. Pictures are embedded in exported PDFs.
+- Lasso options: freeform or rectangle, and filters (handwriting, highlights, text,
+  images, shapes, tapes). Selection menu: style, link, save as sticker, bring to
+  front / send to back, move to layer.
+- Eraser options: erase shapes, erase tape, return to the previous tool.
+- Find in notebook (⌘F), go to page (⌘G or tap the page chip), night mode,
+  study timer, keep screen awake, customise which tools show in the toolbar.
+- 13 templates (Ruled, Margin, Margin right, 2 and 3 columns, Cornell, Grid, Dotted,
+  To-do, Music, Storyboard …), 12 paper colours, paper sizes (A4, Letter, A5, Legal,
+  Square, Tablet) in portrait or landscape.
+- Keyboard: F pen, G highlighter, K tape, E eraser, A lasso, H hand, T text,
+  1–9 pen colours.
+
 **Apple Pencil and touch**
 - The Pencil writes; fingers scroll and pinch-zoom. This switches on by itself
   the first time a Pencil is used (palm rejection). It can be changed in settings.
@@ -113,8 +141,11 @@ ios/           Xcode project spec (XcodeGen), icon, Rust build step.
   with simulated Pencil touches. Pencil feel needs testing on a real device.
 - winit reports the Pencil at the display rate (120 Hz on ProMotion iPads, 60 Hz
   on others), not the Pencil's full 240 Hz. Curve smoothing fills the gaps.
-- Not in v1 yet: importing PDFs or images, audio recording, layers, iCloud sync,
-  Pencil double-tap / squeeze / hover, and handwriting search.
+- Not in v1 yet: audio recording, iCloud sync, Pencil double-tap / squeeze / hover,
+  handwriting search (OCR), zoom window. Importing pictures and PDFs works in the web
+  version only.
+- The web version keeps notebooks in the browser's IndexedDB (older localStorage
+  data is moved over automatically on first load).
 - Typed text in exported PDFs uses Helvetica (Latin characters only).
 
 ## Screenshots (desktop test run)

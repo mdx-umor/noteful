@@ -65,6 +65,35 @@ pub fn template_prims(t: Template, w: f32, h: f32, weight: f32) -> Vec<Prim> {
                 margin: true,
             });
         }
+        Template::Ruled | Template::MarginRight => {
+            let gap = mm(8.7);
+            let mut y = 72.0;
+            while y < h - 24.0 {
+                hline(&mut out, y, 0.0, w, lw);
+                y += gap;
+            }
+            if t == Template::MarginRight {
+                out.push(Prim::Line {
+                    a: [w - 57.0, 0.0],
+                    b: [w - 57.0, h],
+                    w: lw,
+                    margin: true,
+                });
+            }
+        }
+        Template::Columns2 | Template::Columns3 => {
+            let n = if t == Template::Columns2 { 2 } else { 3 };
+            let (mx, gx) = (30.0, 22.0);
+            let cw = (w - mx * 2.0 - gx * (n - 1) as f32) / n as f32;
+            let mut y = 72.0;
+            while y < h - 24.0 {
+                for c in 0..n {
+                    let x = mx + c as f32 * (cw + gx);
+                    hline(&mut out, y, x, x + cw, lw);
+                }
+                y += mm(8.0);
+            }
+        }
         Template::Grid => {
             let g = mm(5.0);
             let mut y = g;

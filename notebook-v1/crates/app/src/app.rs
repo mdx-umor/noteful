@@ -24,6 +24,8 @@ pub struct NotebookApp {
     clipboard: Vec<Item>,
     toast: Option<(String, f64)>,
     applied_dark: Option<bool>,
+    /// The library asked for a file to make a notebook from.
+    lib_import: bool,
     #[cfg(feature = "autotest")]
     pub(crate) autotest: Option<crate::autotest::AutoTest>,
 }
@@ -60,6 +62,7 @@ impl NotebookApp {
             clipboard: Vec::new(),
             toast: None,
             applied_dark: None,
+            lib_import: false,
             #[cfg(feature = "autotest")]
             autotest: crate::autotest::AutoTest::from_env(),
         };
@@ -76,6 +79,9 @@ impl NotebookApp {
             {
                 app.saver.send(Job::Backup(false));
             }
+        }
+        if app.prefs.keep_awake {
+            crate::platform::keep_awake(true);
         }
         app.save_library();
         app
@@ -103,7 +109,7 @@ impl NotebookApp {
         let _ = self.store.save_doc(&doc);
         let _ = self
             .store
-            .save_thumb(doc.id, &render::render_png(&doc.pages[0], 320));
+            .save_thumb(doc.id, &render::render_png_with(&doc.pages[0], 320, &self.store));
         let id = meta.id;
         self.lib.notebooks.push(meta);
         self.save_library();
@@ -128,7 +134,8 @@ impl NotebookApp {
                     m.opened = now_ms();
                 }
                 self.save_library();
-                self.editor = Some(Editor::new(id, title, doc));
+                let assets = crate::assets::Assets::new(self.store.clone());
+                self.editor = Some(Editor::new(id, title, doc, assets));
             }
             Err(e) => self.show_toast(format!("Could not open notebook: {e}")),
         }
@@ -181,11 +188,9 @@ impl NotebookApp {
             .get(id)
             .map(|m| m.title.clone())
             .unwrap_or_else(|| "Notebook".into());
-        let msg = self.export_file(
-            &format!("{title}.pdf"),
-            &pdf::export(&doc, &title),
-            "application/pdf",
-        );
+        let store = self.store.clone();
+        let bytes = pdf::export_with(&doc, &title, &|a| store.load_asset(a));
+        let msg = self.export_file(&format!("{title}.pdf"), &bytes, "application/pdf");
         self.show_toast(msg);
     }
 
@@ -219,15 +224,22 @@ impl NotebookApp {
                     paper,
                     folder,
                     tags,
+                    size,
                 } => {
-                    let doc = Document::new(new_id(), template, paper);
+                    let doc = Document::sized(new_id(), template, paper, size.0, size.1);
                     let id = self.create(&title, cover, doc, folder, tags);
                     self.open(id);
                 }
                 LibAction::QuickNote => {
                     let title = format!("Notes on {}", today());
-                    let doc =
-                        Document::new(new_id(), self.prefs.new_template, self.prefs.new_paper);
+                    let (w, h) = self.prefs.new_size.dims(self.prefs.new_landscape);
+                    let doc = Document::sized(
+                        new_id(),
+                        self.prefs.new_template,
+                        self.prefs.new_paper,
+                        w,
+                        h,
+                    );
                     let cover = Rgba::from_hex("#0a84ff").unwrap_or(Rgba::BLACK);
                     let id = self.create(&title, cover, doc, None, Vec::new());
                     self.open(id);
@@ -251,13 +263,36 @@ impl NotebookApp {
                     }
                 }
                 LibAction::DeleteForever(ids) => {
+                    let mut assets: Vec<Id> = Vec::new();
                     for id in ids {
+                        if let Ok(doc) = self.store.load_doc(id) {
+                            assets.extend(doc.asset_ids());
+                        }
                         let _ = self.store.delete_doc(id);
                         self.store.delete_thumb(id);
                         self.lib.notebooks.retain(|m| m.id != id);
                         self.thumbs.remove(&id);
                     }
+                    // Pictures are shared by duplicated notebooks: only delete unused ones.
+                    if !assets.is_empty() {
+                        for m in &self.lib.notebooks {
+                            if let Ok(doc) = self.store.load_doc(m.id) {
+                                let used = doc.asset_ids();
+                                assets.retain(|a| !used.contains(a));
+                            }
+                        }
+                        for a in assets {
+                            self.store.delete_asset(a);
+                        }
+                    }
                     self.save_library();
+                }
+                LibAction::Import => {
+                    if crate::platform::pick_file(crate::platform::ACCEPT_ANY) {
+                        self.lib_import = true;
+                    } else {
+                        self.show_toast("Importing files works in the web version");
+                    }
                 }
                 LibAction::EmptyTrash => {
                     let ids: Vec<Id> = self
@@ -274,6 +309,52 @@ impl NotebookApp {
                 LibAction::Changed => self.save_library(),
             }
         }
+    }
+
+    /// Makes a notebook out of an imported PDF or photo.
+    fn import_notebook(&mut self, file: crate::platform::Imported) {
+        match file.kind.as_str() {
+            "cancel" => return,
+            "error" => return self.show_toast(format!("Import failed: {}", file.name)),
+            _ => {}
+        }
+        let mut pages = Vec::new();
+        for (w, h, bytes) in &file.pages {
+            let asset = match self.store.save_asset(bytes) {
+                Ok(a) => a,
+                Err(e) => return self.show_toast(format!("Could not save: {e}")),
+            };
+            let (pw, ph) = if file.kind == "pdf" {
+                (*w, *h)
+            } else {
+                (A4_W, A4_W * h / w)
+            };
+            let mut p = Page::sized(Template::Blank, Paper::White, pw, ph);
+            p.background = Some(asset);
+            pages.push(p);
+        }
+        if pages.is_empty() {
+            return self.show_toast("Nothing to import");
+        }
+        let n = pages.len();
+        let doc = Document {
+            id: new_id(),
+            pages,
+            outline: Vec::new(),
+        };
+        let title = file
+            .name
+            .rsplit_once('.')
+            .map_or(file.name.as_str(), |(a, _)| a)
+            .to_string();
+        let folder = match self.lib_view.filter {
+            notebook_core::library::Filter::Folder(f) => Some(f),
+            _ => None,
+        };
+        let cover = Rgba::from_hex("#30b0c7").unwrap_or(Rgba::BLACK);
+        let id = self.create(&title, cover, doc, folder, vec!["Imported".into()]);
+        self.show_toast(format!("Imported {n} page(s)"));
+        self.open(id);
     }
 
     fn create_welcome(&mut self) {
@@ -417,14 +498,32 @@ fn welcome_doc() -> Document {
         width: mm(1.0),
         points: wave,
     })));
-    items.push(Item::new(Content::Shape(Shape {
-        kind: ShapeKind::Ellipse,
-        points: vec![[400.0, 440.0], [530.0, 510.0]],
-        color: Rgba::rgb(217, 48, 37),
-        width: 2.0,
-        fill: None,
-        dashed: false,
+    items.push(Item::new(Content::Shape(Shape::new(
+        ShapeKind::Ellipse,
+        vec![[400.0, 440.0], [530.0, 510.0]],
+        Rgba::rgb(217, 48, 37),
+        2.0,
+    ))));
+    items.push(text(
+        540.0,
+        "New: Tape for studying. Q: What is the capital of France?",
+        14.0,
+        ink,
+    ));
+    items.push(text(570.0, "A: Paris", 14.0, blue));
+    items.push(Item::new(Content::Tape(Tape {
+        points: vec![[66.0, 580.0], [150.0, 580.0]],
+        width: 22.0,
+        color: Rgba::rgb(0xf6, 0xb9, 0xa4),
+        rect: false,
+        revealed: false,
     })));
+    items.push(text(
+        610.0,
+        "Tap the tape to reveal the answer. Also new: layers, stickers, outlines, links, shapes, images and PDF import (Insert ⊕), night mode and a study timer (⋯ menu).",
+        12.0,
+        ink,
+    ));
     page.items = items.into_iter().map(Arc::new).collect();
     doc.pages.push(Page::new(Template::Grid, Paper::White));
     doc.pages.push(Page::new(Template::Dotted, Paper::Night));
@@ -481,6 +580,22 @@ impl eframe::App for NotebookApp {
             }
         });
 
+        // Files picked in the browser arrive a moment later.
+        let waiting = self.lib_import || self.editor.as_ref().is_some_and(|e| e.pending_import.is_some());
+        if waiting {
+            if let Some(file) = crate::platform::poll_import() {
+                if let Some(ed) = &mut self.editor
+                    && let Some(t) = ed.pending_import.take()
+                {
+                    ed.import(t, file);
+                } else if self.lib_import {
+                    self.lib_import = false;
+                    self.import_notebook(file);
+                }
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+
         // Editor events and autosave.
         let mut close = false;
         let mut export_pdf = None;
@@ -491,7 +606,7 @@ impl eframe::App for NotebookApp {
                     EditorEvent::Close => close = true,
                     EditorEvent::ExportPdf => export_pdf = Some(ed.meta_id),
                     EditorEvent::ExportPng(i) => {
-                        let png = render::render_png(&ed.doc.pages[i], 1654);
+                        let png = render::render_png_with(&ed.doc.pages[i], 1654, &ed.assets);
                         let name = format!("{} - page {}.png", ed.title, i + 1);
                         pending_png.push((name, png));
                     }

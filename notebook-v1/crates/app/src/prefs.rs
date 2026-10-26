@@ -2,11 +2,36 @@
 
 use notebook_core::library::SortBy;
 use notebook_core::storage::Store;
-use notebook_core::{Paper, PenKind, Rgba, ShapeKind, Template};
+use notebook_core::{Paper, PaperSize, PenKind, Rgba, ShapeKind, Sticker, Template};
 use serde::{Deserialize, Serialize};
 
 pub const PEN_SIZES_MM: [f32; 5] = [0.35, 0.8, 1.2, 1.9, 3.8];
 pub const HL_SIZES_MM: [f32; 5] = [2.0, 3.5, 5.0, 7.0, 10.0];
+pub const TAPE_SIZES_MM: [f32; 5] = [3.0, 5.0, 7.0, 10.0, 14.0];
+/// Pastel tape patterns: peach, pink, lilac, blue.
+pub const TAPE_COLORS: [&str; 4] = ["#f6b9a4", "#f4b6cf", "#cdb9ef", "#b2c6f2"];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TapeKind {
+    Line,
+    Rect,
+    Free,
+}
+
+/// Tools that can be hidden from the toolbar (Customize Toolbar).
+pub const TOOL_NAMES: [&str; 11] = [
+    "Pen",
+    "Highlighter",
+    "Tape",
+    "Eraser",
+    "Lasso",
+    "Hand",
+    "Laser",
+    "Shapes",
+    "Text",
+    "Stickers",
+    "Insert",
+];
 
 pub fn default_swatches() -> Vec<Rgba> {
     [
@@ -70,6 +95,30 @@ pub struct Prefs {
     pub new_paper: Paper,
     pub auto_backup: bool,
     pub two_finger_undo: bool,
+    pub tape_kind: TapeKind,
+    pub tape_mm: f32,
+    pub tape_color: Rgba,
+    pub eraser_shapes: bool,
+    pub eraser_tapes: bool,
+    /// After erasing, switch back to the tool used before.
+    pub eraser_return: bool,
+    pub lasso_rect: bool,
+    pub lasso_ink: bool,
+    pub lasso_hl: bool,
+    pub lasso_text: bool,
+    pub lasso_shapes: bool,
+    pub lasso_tapes: bool,
+    pub lasso_images: bool,
+    /// Dark pages with light ink, whatever the paper.
+    pub night_mode: bool,
+    pub show_timer: bool,
+    pub keep_awake: bool,
+    pub hidden_tools: Vec<String>,
+    pub stickers: Vec<Sticker>,
+    pub new_size: PaperSize,
+    pub new_landscape: bool,
+    /// Insert-shape colour.
+    pub fill_color: Rgba,
 }
 
 impl Default for Prefs {
@@ -106,11 +155,36 @@ impl Default for Prefs {
             new_paper: Paper::Cream,
             auto_backup: true,
             two_finger_undo: true,
+            tape_kind: TapeKind::Free,
+            tape_mm: 7.0,
+            tape_color: Rgba::from_hex(TAPE_COLORS[0]).unwrap_or(Rgba::WHITE),
+            eraser_shapes: true,
+            eraser_tapes: true,
+            eraser_return: false,
+            lasso_rect: false,
+            lasso_ink: true,
+            lasso_hl: true,
+            lasso_text: true,
+            lasso_shapes: true,
+            lasso_tapes: true,
+            lasso_images: true,
+            night_mode: false,
+            show_timer: false,
+            keep_awake: false,
+            hidden_tools: Vec::new(),
+            stickers: Vec::new(),
+            new_size: PaperSize::A4,
+            new_landscape: false,
+            fill_color: Rgba::rgb(0xff, 0xd6, 0x0a),
         }
     }
 }
 
 impl Prefs {
+    pub fn tool_visible(&self, name: &str) -> bool {
+        !self.hidden_tools.iter().any(|t| t == name)
+    }
+
     pub fn load(store: &Store) -> Prefs {
         store
             .read_file("prefs.json")

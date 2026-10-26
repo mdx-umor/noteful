@@ -321,12 +321,18 @@ impl Editor {
             .items
             .iter()
             .any(|i| matches!(i.content, Content::Text(_)) && geom::hit_item(i, p[0], p[1], 4.0));
+        if self.popover != Popover::None {
+            self.popover = Popover::None;
+            return;
+        }
+        if self.tool != Tool::Text && self.tap_item(pos) {
+            return;
+        }
         if on_text || self.tool == Tool::Text {
             self.start_text(page, p, prefs);
         } else if self.selection.is_some() {
             self.selection = None;
         }
-        self.popover = Popover::None;
     }
 
     /// Is the point on the selection? Returns true for the resize handle.
@@ -355,6 +361,7 @@ impl Editor {
     // ---------- tool actions ----------
 
     pub fn down(&mut self, pos: Pos2, p: f32, device: Device, prefs: &Prefs) {
+        self.tap_start = Some((pos, self.now));
         // The first tap outside an open panel only closes it.
         if self.popover != Popover::None {
             self.popover = Popover::None;
@@ -413,7 +420,26 @@ impl Editor {
             return;
         };
         let pt = self.screen_to_page(page, pos);
+        let writes = matches!(
+            self.tool,
+            Tool::Pen | Tool::Highlighter | Tool::Tape | Tool::Shape | Tool::Text
+        );
+        if writes && !self.can_write(page) {
+            // Taps still reveal tape and follow links on locked layers.
+            if !self.tap_item(pos) {
+                self.toast("The active layer is locked or hidden. Pick another in Layers.");
+            }
+            self.action = Action::Idle;
+            return;
+        }
         match self.tool {
+            Tool::Tape => {
+                self.selection = None;
+                self.action = Action::TapeDraw {
+                    page,
+                    pts: vec![pt],
+                };
+            }
             Tool::Pen | Tool::Highlighter => {
                 self.selection = None;
                 let doc = self.screen_to_doc(pos);
@@ -555,6 +581,25 @@ impl Editor {
                     pts.push(pt);
                 }
             }
+            Action::TapeDraw { page, pts } => {
+                let page = *page;
+                let pt = {
+                    let d = (pos - self.canvas.min - self.offset) / zoom;
+                    let o = [(self.max_w - self.doc.pages[page].w) / 2.0, self.tops[page]];
+                    [d.x - o[0], d.y - o[1]]
+                };
+                match prefs.tape_kind {
+                    crate::prefs::TapeKind::Free => {
+                        if pts.last().is_none_or(|l| geom::dist(*l, pt) * zoom > 2.0) {
+                            pts.push(pt);
+                        }
+                    }
+                    _ => {
+                        pts.truncate(1);
+                        pts.push(pt);
+                    }
+                }
+            }
             Action::Move { page, start, .. } => {
                 let (page, s) = (*page, *start);
                 let pt = self.screen_to_page(page, pos);
@@ -616,7 +661,12 @@ impl Editor {
 
     pub fn up(&mut self, pos: Pos2, prefs: &Prefs, _clipboard: &mut Vec<Item>) {
         let action = std::mem::replace(&mut self.action, Action::Idle);
+        let tap = self
+            .tap_start
+            .take()
+            .is_some_and(|(p0, t0)| p0.distance(pos) < 8.0 && self.now - t0 < 0.4);
         match action {
+            Action::Ink { .. } if tap && self.tap_item_with(pos, false) => {}
             Action::Ink {
                 page,
                 mut pts,
@@ -708,23 +758,68 @@ impl Editor {
                 if let Some(b) = before {
                     self.commit(b);
                 }
+                if prefs.eraser_return && self.prev_tool != Tool::Eraser {
+                    self.set_tool(self.prev_tool);
+                }
             }
-            Action::Lasso { page, pts } => {
+            Action::TapeDraw { page, pts } => {
+                if tap || pts.len() < 2 {
+                    self.tap_item(pos);
+                    return;
+                }
+                let rect = prefs.tape_kind == crate::prefs::TapeKind::Rect;
+                let pts = if prefs.tape_kind == crate::prefs::TapeKind::Free {
+                    notebook_core::recognize::rdp(&pts, 0.8)
+                } else {
+                    vec![pts[0], *pts.last().expect("len >= 2")]
+                };
+                if geom::dist(pts[0], *pts.last().expect("non-empty")) * self.zoom < 6.0
+                    && pts.len() < 3
+                {
+                    return;
+                }
+                self.add_item(
+                    page,
+                    Item::new(Content::Tape(Tape {
+                        points: pts,
+                        width: mm(prefs.tape_mm),
+                        color: prefs.tape_color,
+                        rect,
+                        revealed: false,
+                    })),
+                );
+            }
+            Action::Lasso { page, mut pts } => {
                 let len: f32 =
                     pts.windows(2).map(|w| geom::dist(w[0], w[1])).sum::<f32>() * self.zoom;
-                let items = &self.doc.pages[page].items;
+                if prefs.lasso_rect && pts.len() > 1 {
+                    let (a, b) = (pts[0], *pts.last().expect("len > 1"));
+                    pts = vec![a, [b[0], a[1]], b, [a[0], b[1]]];
+                }
+                let pg = &self.doc.pages[page];
+                let wanted = |i: &Item| {
+                    pg.editable(i)
+                        && match i.kind() {
+                            ItemKind::Ink => prefs.lasso_ink,
+                            ItemKind::Highlight => prefs.lasso_hl,
+                            ItemKind::Text => prefs.lasso_text,
+                            ItemKind::Shape => prefs.lasso_shapes,
+                            ItemKind::Tape => prefs.lasso_tapes,
+                            ItemKind::Image => prefs.lasso_images,
+                        }
+                };
                 let ids: Vec<Id> = if len < 12.0 {
                     let p = pts[0];
-                    items
+                    pg.items
                         .iter()
                         .rev()
-                        .find(|i| geom::hit_item(i, p[0], p[1], 8.0 / self.zoom))
+                        .find(|i| wanted(i) && geom::hit_item(i, p[0], p[1], 8.0 / self.zoom))
                         .map(|i| vec![i.id])
                         .unwrap_or_default()
                 } else {
-                    items
+                    pg.items
                         .iter()
-                        .filter(|i| geom::item_in_lasso(i, &pts))
+                        .filter(|i| wanted(i) && geom::item_in_lasso(i, &pts))
                         .map(|i| i.id)
                         .collect()
                 };
@@ -743,14 +838,14 @@ impl Editor {
             }
             Action::ShapeDrag { page, a, b } => {
                 if geom::dist(a, b) * self.zoom > 4.0 {
-                    let sh = Shape {
-                        kind: prefs.shape_kind,
-                        points: vec![a, b],
-                        color: prefs.shape_color,
-                        width: mm(prefs.shape_mm),
-                        fill: prefs.shape_fill.then_some(prefs.shape_color),
-                        dashed: prefs.shape_dashed,
-                    };
+                    let mut sh = Shape::new(
+                        prefs.shape_kind,
+                        vec![a, b],
+                        prefs.shape_color,
+                        mm(prefs.shape_mm),
+                    );
+                    sh.fill = prefs.shape_fill.then_some(prefs.shape_color);
+                    sh.dashed = prefs.shape_dashed;
                     self.add_item(page, Item::new(Content::Shape(sh)));
                 }
             }
@@ -761,7 +856,12 @@ impl Editor {
                     }
                 }
             }
-            Action::Pan { .. } | Action::RulerMove { .. } | Action::Idle => {}
+            Action::Pan { .. } => {
+                if tap {
+                    self.tap_item(pos);
+                }
+            }
+            Action::RulerMove { .. } | Action::Idle => {}
         }
     }
 
@@ -787,14 +887,7 @@ impl Editor {
             if let Some((kind, points)) = recognize(&xy)
                 && (tool == Tool::Pen || kind == ShapeKind::Line)
             {
-                *snapped = Some(Shape {
-                    kind,
-                    points,
-                    color: prefs.pen_color,
-                    width: mm(prefs.pen_mm),
-                    fill: None,
-                    dashed: false,
-                });
+                *snapped = Some(Shape::new(kind, points, prefs.pen_color, mm(prefs.pen_mm)));
                 let _ = zoom;
             }
             *still_since = now + 1e9; // try once per pause
@@ -804,16 +897,21 @@ impl Editor {
 
     fn erase_at(&mut self, page: usize, p: [f32; 2], prefs: &Prefs) {
         let r = prefs.eraser_size / self.zoom;
-        let items = &self.doc.pages[page].items;
+        let pg = &self.doc.pages[page];
+        let items = &pg.items;
         let hits: Vec<usize> = items
             .iter()
             .enumerate()
             .filter(|(_, it)| {
-                let eligible = match &it.content {
-                    Content::Stroke(s) => !prefs.eraser_hl_only || s.pen == PenKind::Highlighter,
-                    Content::Shape(_) => !prefs.eraser_hl_only,
-                    Content::Text(_) => false,
-                };
+                let eligible = pg.editable(it)
+                    && match &it.content {
+                        Content::Stroke(s) => {
+                            !prefs.eraser_hl_only || s.pen == PenKind::Highlighter
+                        }
+                        Content::Shape(_) => !prefs.eraser_hl_only && prefs.eraser_shapes,
+                        Content::Tape(_) => !prefs.eraser_hl_only && prefs.eraser_tapes,
+                        Content::Text(_) | Content::Image(_) => false,
+                    };
                 eligible && geom::hit_item(it, p[0], p[1], r)
             })
             .map(|(i, _)| i)
@@ -837,7 +935,9 @@ impl Editor {
                 && let Content::Stroke(s) = &it.content
             {
                 for part in split_stroke(s, p, r) {
-                    out.push(Arc::new(Item::new(Content::Stroke(part))));
+                    let mut piece = Item::new(Content::Stroke(part));
+                    piece.layer = it.layer;
+                    out.push(Arc::new(piece));
                 }
             }
         }

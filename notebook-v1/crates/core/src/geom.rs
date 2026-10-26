@@ -1,6 +1,6 @@
 //! Bounding boxes, hit testing, lasso tests and transforms.
 
-use crate::model::{Content, Item, Shape, ShapeKind};
+use crate::model::{Content, Item, Shape, ShapeKind, Tape};
 use crate::text;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -122,6 +122,18 @@ pub fn shape_outline(s: &Shape) -> (Vec<[f32; 2]>, bool) {
     }
 }
 
+/// Centre line of a tape (a rectangle tape is its outline, closed).
+pub fn tape_outline(t: &Tape) -> (Vec<[f32; 2]>, bool) {
+    if t.rect && t.points.len() >= 2 {
+        let (a, b) = (t.points[0], t.points[1]);
+        let (x1, x2) = (a[0].min(b[0]), a[0].max(b[0]));
+        let (y1, y2) = (a[1].min(b[1]), a[1].max(b[1]));
+        (vec![[x1, y1], [x2, y1], [x2, y2], [x1, y2]], true)
+    } else {
+        (t.points.clone(), false)
+    }
+}
+
 pub fn item_bbox(it: &Item) -> Rect {
     match &it.content {
         Content::Stroke(s) => {
@@ -136,6 +148,12 @@ pub fn item_bbox(it: &Item) -> Rect {
             r
         }
         Content::Text(t) => Rect::new(t.x, t.y, t.w, text::text_height(&t.text, t.size, t.w)),
+        Content::Tape(t) => {
+            let (pts, _) = tape_outline(t);
+            let r = Rect::from_points(pts.iter());
+            if t.rect { r } else { r.expand(t.width / 2.0) }
+        }
+        Content::Image(im) => Rect::new(im.x, im.y, im.w, im.h),
     }
 }
 
@@ -174,7 +192,14 @@ pub fn hit_item(it: &Item, x: f32, y: f32, r: f32) -> bool {
             let (pts, closed) = shape_outline(s);
             poly_hit(&pts, closed, p, r + s.width / 2.0)
         }
-        Content::Text(_) => item_bbox(it).expand(r).contains(x, y),
+        Content::Text(_) | Content::Image(_) => item_bbox(it).expand(r).contains(x, y),
+        Content::Tape(t) => {
+            if t.rect {
+                item_bbox(it).expand(r).contains(x, y)
+            } else {
+                poly_hit(&t.points, false, p, r + t.width / 2.0)
+            }
+        }
     }
 }
 
@@ -201,10 +226,11 @@ pub fn item_in_lasso(it: &Item, poly: &[[f32; 2]]) -> bool {
     let pts: Vec<[f32; 2]> = match &it.content {
         Content::Stroke(s) => s.points.iter().map(|q| [q.x, q.y]).collect(),
         Content::Shape(s) => shape_outline(s).0,
-        Content::Text(_) => {
+        Content::Text(_) | Content::Image(_) => {
             let c = item_bbox(it).center();
             return point_in_poly(c[0], c[1], poly);
         }
+        Content::Tape(t) => tape_outline(t).0,
     };
     if pts.is_empty() {
         return false;
@@ -244,6 +270,22 @@ pub fn transform_item(it: &Item, f: impl Fn(f32, f32) -> [f32; 2], s: f32) -> It
             t.y = q[1];
             t.w *= s;
             t.size *= s;
+        }
+        Content::Tape(t) => {
+            if !t.rect {
+                t.width *= s;
+            }
+            for p in &mut t.points {
+                *p = f(p[0], p[1]);
+            }
+        }
+        Content::Image(im) => {
+            let a = f(im.x, im.y);
+            let b = f(im.x + im.w, im.y + im.h);
+            im.x = a[0].min(b[0]);
+            im.y = a[1].min(b[1]);
+            im.w = (b[0] - a[0]).abs();
+            im.h = (b[1] - a[1]).abs();
         }
     }
     out

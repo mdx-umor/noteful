@@ -26,6 +26,7 @@ pub const MAX_ZOOM: f32 = 8.0;
 pub enum Tool {
     Pen,
     Highlighter,
+    Tape,
     Eraser,
     Lasso,
     Hand,
@@ -42,12 +43,55 @@ pub enum Popover {
     Insert,
     More,
     Template,
+    Shapes,
+    Stickers,
+    ShapeStyle,
+    MoveToLayer,
+    Customize,
+    GoTo,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SideTab {
     Pages,
     Bookmarks,
+    Outline,
+    Layers,
+}
+
+/// What a picked file is for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ImportTarget {
+    /// A picture placed on the current page.
+    Image,
+    /// PDF pages or a photo added as new pages after the current one.
+    Pages,
+}
+
+/// Text being edited in a small dialog.
+#[derive(Clone, Debug)]
+pub enum EditDialog {
+    Link {
+        url: String,
+        page: String,
+        web: bool,
+    },
+    LayerName(usize, Id, String),
+    OutlineTitle(Id, String),
+    Find(String),
+}
+
+/// Study timer (stopwatch).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Timer {
+    pub since: Option<f64>,
+    pub acc: f64,
+}
+
+impl Timer {
+    pub fn seconds(&self, now: f64) -> f64 {
+        self.acc + self.since.map_or(0.0, |s| now - s)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +119,10 @@ pub enum Action {
         last: [f32; 2],
     },
     Lasso {
+        page: usize,
+        pts: Vec<[f32; 2]>,
+    },
+    TapeDraw {
         page: usize,
         pts: Vec<[f32; 2]>,
     },
@@ -203,10 +251,25 @@ pub struct Editor {
     pub rename: Option<String>,
     pub bookmark_edit: Option<(usize, String)>,
     pub thumbs: crate::textures::PageThumbs,
+    pub assets: crate::assets::Assets,
+    /// Layer new items go to, per page id.
+    pub active_layer: HashMap<Id, Id>,
+    /// Pages to return to after following links.
+    pub back_stack: Vec<usize>,
+    pub edit: Option<EditDialog>,
+    pub pending_import: Option<ImportTarget>,
+    pub timer: Timer,
+    pub prev_tool: Tool,
+    /// Where and when the current touch started (for taps on links and tapes).
+    pub tap_start: Option<(Pos2, f64)>,
+    pub goto_text: String,
+    /// Canvas width when the zoom was last fitted to the page width.
+    pub fit_canvas_w: f32,
 }
 
 impl Editor {
-    pub fn new(meta_id: Id, title: String, doc: Document) -> Self {
+    pub fn new(meta_id: Id, title: String, mut doc: Document, assets: crate::assets::Assets) -> Self {
+        doc.normalize();
         Editor {
             meta_id,
             title,
@@ -245,6 +308,16 @@ impl Editor {
             rename: None,
             bookmark_edit: None,
             thumbs: Default::default(),
+            assets,
+            active_layer: HashMap::new(),
+            back_stack: Vec::new(),
+            edit: None,
+            pending_import: None,
+            timer: Timer::default(),
+            prev_tool: Tool::Pen,
+            tap_start: None,
+            goto_text: String::new(),
+            fit_canvas_w: 0.0,
         }
     }
 
@@ -396,12 +469,409 @@ impl Editor {
         self.current = self.current.min(self.doc.pages.len() - 1);
     }
 
+    // ---------- layers ----------
+
+    /// The layer new items on page `i` go to (the top layer unless another was chosen).
+    pub fn active_layer_id(&self, i: usize) -> Id {
+        let page = &self.doc.pages[i];
+        self.active_layer
+            .get(&page.id)
+            .copied()
+            .filter(|id| page.layer(*id).is_some())
+            .or_else(|| page.layers.last().map(|l| l.id))
+            .unwrap_or(0)
+    }
+
+    /// Can new items be added to page `i` (active layer visible and unlocked)?
+    pub fn can_write(&self, i: usize) -> bool {
+        let page = &self.doc.pages[i];
+        page.layer(self.active_layer_id(i))
+            .is_none_or(|l| l.visible && !l.locked)
+    }
+
+    pub fn add_layer(&mut self, i: usize) {
+        let before = self.snapshot();
+        let page = &mut self.doc.pages[i];
+        let n = page.layers.len() + 1;
+        let id = new_id();
+        page.layers.push(Layer {
+            id,
+            name: format!("Layer {n}"),
+            visible: true,
+            locked: false,
+        });
+        let pid = page.id;
+        self.commit(before);
+        self.active_layer.insert(pid, id);
+    }
+
+    pub fn update_layer(&mut self, i: usize, id: Id, f: impl FnOnce(&mut Layer)) {
+        let before = self.snapshot();
+        if let Some(l) = self.doc.pages[i].layers.iter_mut().find(|l| l.id == id) {
+            f(l);
+        }
+        self.commit(before);
+        self.selection = None;
+    }
+
+    pub fn delete_layer(&mut self, i: usize, id: Id) {
+        if self.doc.pages[i].layers.len() <= 1 {
+            self.toast("A page needs at least one layer");
+            return;
+        }
+        let before = self.snapshot();
+        let page = &mut self.doc.pages[i];
+        page.layers.retain(|l| l.id != id);
+        page.items.retain(|it| it.layer != id);
+        self.commit(before);
+        self.selection = None;
+    }
+
+    pub fn duplicate_layer(&mut self, i: usize, id: Id) {
+        let before = self.snapshot();
+        let page = &mut self.doc.pages[i];
+        let Some(pos) = page.layers.iter().position(|l| l.id == id) else {
+            return;
+        };
+        let nid = new_id();
+        let mut l = page.layers[pos].clone();
+        l.id = nid;
+        l.name = format!("{} copy", l.name);
+        page.layers.insert(pos + 1, l);
+        let copies: Vec<Arc<Item>> = page
+            .items
+            .iter()
+            .filter(|it| it.layer == id)
+            .map(|it| {
+                let mut c = (**it).clone();
+                c.id = new_id();
+                c.layer = nid;
+                Arc::new(c)
+            })
+            .collect();
+        page.items.extend(copies);
+        self.commit(before);
+    }
+
+    /// Moves layer `id` one step up (towards the top) or down.
+    pub fn move_layer(&mut self, i: usize, id: Id, up: bool) {
+        let page = &self.doc.pages[i];
+        let Some(pos) = page.layers.iter().position(|l| l.id == id) else {
+            return;
+        };
+        let to = if up { pos + 1 } else { pos.wrapping_sub(1) };
+        if to >= page.layers.len() {
+            return;
+        }
+        let before = self.snapshot();
+        self.doc.pages[i].layers.swap(pos, to);
+        self.commit(before);
+    }
+
+    /// Moves everything on layer `id` into the layer below it and removes `id`.
+    pub fn merge_down(&mut self, i: usize, id: Id) {
+        let page = &self.doc.pages[i];
+        let Some(pos) = page.layers.iter().position(|l| l.id == id) else {
+            return;
+        };
+        if pos == 0 {
+            return;
+        }
+        let below = page.layers[pos - 1].id;
+        let before = self.snapshot();
+        let page = &mut self.doc.pages[i];
+        for it in page.items.iter_mut() {
+            if it.layer == id {
+                let mut c = (**it).clone();
+                c.layer = below;
+                *it = Arc::new(c);
+            }
+        }
+        page.layers.remove(pos);
+        self.commit(before);
+    }
+
+    pub fn move_selection_to_layer(&mut self, layer: Id) {
+        self.map_selection(|it| {
+            let mut c = it.clone();
+            c.layer = layer;
+            c
+        });
+    }
+
     // ---------- items ----------
 
-    pub fn add_item(&mut self, page: usize, item: Item) {
+    pub fn add_item(&mut self, page: usize, mut item: Item) {
+        item.layer = self.active_layer_id(page);
         let before = self.snapshot();
         self.doc.pages[page].items.push(Arc::new(item));
         self.commit(before);
+    }
+
+    /// Adds several items as one undo step and selects them.
+    pub fn add_items(&mut self, page: usize, items: Vec<Item>) {
+        let layer = self.active_layer_id(page);
+        let before = self.snapshot();
+        let mut ids = Vec::new();
+        for mut it in items {
+            it.layer = layer;
+            it.id = new_id();
+            ids.push(it.id);
+            self.doc.pages[page].items.push(Arc::new(it));
+        }
+        self.commit(before);
+        self.selection = Some(Selection { page, ids });
+        self.tool = Tool::Lasso;
+    }
+
+    /// Top-most visible item of a kind-filter under a page point.
+    pub fn item_at(&self, page: usize, p: [f32; 2], r: f32, f: impl Fn(&Item) -> bool) -> Option<Arc<Item>> {
+        let pg = &self.doc.pages[page];
+        pg.items
+            .iter()
+            .rev()
+            .find(|i| pg.visible(i) && f(i) && geom::hit_item(i, p[0], p[1], r))
+            .cloned()
+    }
+
+    /// Flips a tape between covering and revealed. Not an undo step.
+    pub fn toggle_tape(&mut self, page: usize, id: Id) {
+        let items = &mut self.doc.pages[page].items;
+        if let Some(it) = items.iter_mut().find(|i| i.id == id) {
+            let mut c = (**it).clone();
+            if let Content::Tape(t) = &mut c.content {
+                t.revealed = !t.revealed;
+            }
+            *it = Arc::new(c);
+            self.touch();
+        }
+    }
+
+    /// Covers (or reveals) every tape on the current page.
+    pub fn set_all_tapes(&mut self, revealed: bool) {
+        let page = &mut self.doc.pages[self.current];
+        let mut n = 0;
+        for it in page.items.iter_mut() {
+            if let Content::Tape(t) = &it.content
+                && t.revealed != revealed
+            {
+                let mut c = (**it).clone();
+                if let Content::Tape(t) = &mut c.content {
+                    t.revealed = revealed;
+                }
+                *it = Arc::new(c);
+                n += 1;
+            }
+        }
+        if n > 0 {
+            self.touch();
+        } else {
+            self.toast("No tape on this page");
+        }
+    }
+
+    /// Follows a link: web pages open in a new tab, page links jump inside the notebook.
+    pub fn follow_link(&mut self, link: &Link) {
+        match link {
+            Link::Url(u) => crate::platform::open_url(u),
+            Link::Page(id) => {
+                if let Some(i) = self.doc.page_index(*id) {
+                    self.back_stack.push(self.current);
+                    if self.back_stack.len() > 20 {
+                        self.back_stack.remove(0);
+                    }
+                    self.scroll_to = Some(i);
+                } else {
+                    self.toast("That page no longer exists");
+                }
+            }
+        }
+    }
+
+    pub fn go_back(&mut self) {
+        if let Some(i) = self.back_stack.pop() {
+            self.scroll_to = Some(i.min(self.doc.pages.len() - 1));
+        }
+    }
+
+    /// A tap (finger, hand tool, or a tiny pen dot) on tape or a link.
+    /// Returns true when it did something. Pen dots only toggle tape.
+    pub fn tap_item(&mut self, pos: Pos2) -> bool {
+        self.tap_item_with(pos, true)
+    }
+
+    pub fn tap_item_with(&mut self, pos: Pos2, links: bool) -> bool {
+        let Some(page) = self.page_at(pos) else {
+            return false;
+        };
+        let p = self.screen_to_page(page, pos);
+        let r = 6.0 / self.zoom;
+        if let Some(t) = self.item_at(page, p, r, |i| i.is_tape()) {
+            self.toggle_tape(page, t.id);
+            return true;
+        }
+        if links
+            && let Some(it) = self.item_at(page, p, r, |i| i.link.is_some())
+            && let Some(l) = it.link.clone()
+        {
+            self.follow_link(&l);
+            return true;
+        }
+        false
+    }
+
+    pub fn set_selection_link(&mut self, link: Option<Link>) {
+        self.map_selection(|it| {
+            let mut c = it.clone();
+            c.link = link.clone();
+            c
+        });
+    }
+
+    pub fn send_to_back(&mut self) {
+        let Some(sel) = self.selection.clone() else {
+            return;
+        };
+        let before = self.snapshot();
+        let items = &mut self.doc.pages[sel.page].items;
+        let (sel_items, rest): (Vec<_>, Vec<_>) =
+            items.drain(..).partition(|i| sel.ids.contains(&i.id));
+        items.extend(sel_items);
+        items.extend(rest);
+        self.commit(before);
+    }
+
+    /// Saves the selection as a sticker (positioned at the origin).
+    pub fn selection_as_sticker(&self) -> Option<Sticker> {
+        let items = self.selected_items();
+        let b = geom::union_bbox(items.iter().map(|a| a.as_ref()))?;
+        let items = items
+            .iter()
+            .map(|it| {
+                let mut c = geom::translate_item(it, -b.x, -b.y);
+                c.layer = 0;
+                c
+            })
+            .collect();
+        Some(Sticker {
+            id: new_id(),
+            items,
+            used: now_ms(),
+        })
+    }
+
+    /// Drops a sticker in the middle of the visible part of the current page.
+    pub fn place_sticker(&mut self, st: &Sticker) {
+        let page = self.current;
+        if !self.can_write(page) {
+            self.toast("The active layer is locked or hidden");
+            return;
+        }
+        let Some(b) = geom::union_bbox(st.items.iter()) else {
+            return;
+        };
+        let c = self.visible_center(page);
+        let (dx, dy) = (c[0] - b.center()[0], c[1] - b.center()[1]);
+        let items = st
+            .items
+            .iter()
+            .map(|it| geom::translate_item(it, dx, dy))
+            .collect();
+        self.add_items(page, items);
+    }
+
+    // ---------- outline ----------
+
+    pub fn add_outline(&mut self) {
+        let page = self.doc.pages[self.current].id;
+        let title = self.doc.pages[self.current]
+            .bookmark
+            .clone()
+            .unwrap_or_else(|| format!("Page {}", self.current + 1));
+        let entry = OutlineEntry {
+            id: new_id(),
+            title: title.clone(),
+            page,
+            level: 0,
+        };
+        // Keep the outline in page order.
+        let order = |e: &OutlineEntry| self.doc.page_index(e.page).unwrap_or(usize::MAX);
+        let at = self
+            .doc
+            .outline
+            .iter()
+            .position(|e| order(e) > self.current)
+            .unwrap_or(self.doc.outline.len());
+        self.doc.outline.insert(at, entry.clone());
+        self.touch();
+        self.edit = Some(EditDialog::OutlineTitle(entry.id, title));
+    }
+
+    // ---------- pictures ----------
+
+    /// Handles a file the user picked.
+    pub fn import(&mut self, target: ImportTarget, file: crate::platform::Imported) {
+        match file.kind.as_str() {
+            "cancel" => return,
+            "error" => {
+                self.toast(format!("Import failed: {}", file.name));
+                return;
+            }
+            _ => {}
+        }
+        let mut stored = Vec::new();
+        for (w, h, bytes) in &file.pages {
+            match self.assets.add_jpeg(bytes) {
+                Ok(id) => stored.push((*w, *h, id)),
+                Err(e) => {
+                    self.toast(format!("Could not save the picture: {e}"));
+                    return;
+                }
+            }
+        }
+        let page = self.current;
+        match (target, file.kind.as_str()) {
+            (ImportTarget::Image, "image") => {
+                let Some(&(w, h, asset)) = stored.first() else {
+                    return;
+                };
+                if !self.can_write(page) {
+                    self.toast("The active layer is locked or hidden");
+                    return;
+                }
+                let pw = self.doc.pages[page].w;
+                let s = (pw * 0.6 / w).min(1.0).min(pw * 0.6 / h);
+                let (iw, ih) = (w * s, h * s);
+                let c = self.visible_center(page);
+                let item = Item::new(Content::Image(ImageBox {
+                    asset,
+                    x: c[0] - iw / 2.0,
+                    y: c[1] - ih / 2.0,
+                    w: iw,
+                    h: ih,
+                }));
+                self.add_items(page, vec![item]);
+            }
+            _ => {
+                // New pages after the current one, each showing one picture.
+                let before = self.snapshot();
+                let base_w = self.doc.pages[page].w;
+                for (k, (w, h, asset)) in stored.iter().enumerate() {
+                    let (pw, ph) = if file.kind == "pdf" {
+                        (*w, *h)
+                    } else {
+                        (base_w, base_w * h / w)
+                    };
+                    let mut p = Page::sized(Template::Blank, Paper::White, pw, ph);
+                    p.background = Some(*asset);
+                    self.doc.pages.insert(page + 1 + k, p);
+                }
+                self.commit(before);
+                self.layout();
+                self.scroll_to = Some(page + 1);
+                self.toast(format!("Added {} page(s)", stored.len()));
+            }
+        }
     }
 
     pub fn selected_items(&self) -> Vec<Arc<Item>> {
@@ -486,9 +956,11 @@ impl Editor {
         let (dx, dy) = (vis[0] - bbox.center()[0], vis[1] - bbox.center()[1]);
         let before = self.snapshot();
         let mut ids = Vec::new();
+        let layer = self.active_layer_id(page);
         for it in clipboard {
             let mut c = geom::translate_item(it, dx, dy);
             c.id = new_id();
+            c.layer = layer;
             ids.push(c.id);
             self.doc.pages[page].items.push(Arc::new(c));
         }
@@ -512,7 +984,8 @@ impl Editor {
 
     pub fn select_all(&mut self) {
         let page = self.current;
-        let ids: Vec<Id> = self.doc.pages[page].items.iter().map(|i| i.id).collect();
+        let pg = &self.doc.pages[page];
+        let ids: Vec<Id> = pg.items.iter().filter(|i| pg.editable(i)).map(|i| i.id).collect();
         if !ids.is_empty() {
             self.selection = Some(Selection { page, ids });
             self.tool = Tool::Lasso;
@@ -589,6 +1062,50 @@ impl Editor {
         self.selection = None;
     }
 
+    /// Changes the size of the current page (or all pages). Content stays where it is.
+    pub fn set_page_size(&mut self, w: f32, h: f32, all: bool) {
+        let before = self.snapshot();
+        for (i, p) in self.doc.pages.iter_mut().enumerate() {
+            if (all || i == self.current) && p.background.is_none() {
+                p.w = w;
+                p.h = h;
+            }
+        }
+        self.commit(before);
+        self.layout();
+        self.fitted = false;
+    }
+
+    /// Pages whose typed text, bookmark or outline title contains `q`.
+    pub fn find(&self, q: &str) -> Vec<(usize, String)> {
+        let q = q.trim().to_lowercase();
+        if q.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for (i, p) in self.doc.pages.iter().enumerate() {
+            let mut texts: Vec<String> = p.bookmark.iter().cloned().collect();
+            for it in &p.items {
+                if let Content::Text(t) = &it.content {
+                    texts.push(t.text.clone());
+                }
+            }
+            for o in &self.doc.outline {
+                if o.page == p.id {
+                    texts.push(o.title.clone());
+                }
+            }
+            for t in texts {
+                if let Some(pos) = t.to_lowercase().find(&q) {
+                    let start = t.floor_char_boundary(pos.saturating_sub(24));
+                    let end = t.floor_char_boundary((pos + q.len() + 40).min(t.len()));
+                    out.push((i, t[start..end].replace('\n', " ")));
+                }
+            }
+        }
+        out
+    }
+
     pub fn set_template(&mut self, t: Template, paper: Paper, all: bool) {
         let before = self.snapshot();
         for (i, p) in self.doc.pages.iter_mut().enumerate() {
@@ -611,11 +1128,16 @@ impl Editor {
     pub fn start_text(&mut self, page: usize, at: [f32; 2], prefs: &Prefs) {
         self.finish_text();
         // Tap on existing text edits it.
-        let hit = self.doc.pages[page]
+        let pg = &self.doc.pages[page];
+        let hit = pg
             .items
             .iter()
             .rev()
-            .find(|i| matches!(i.content, Content::Text(_)) && geom::hit_item(i, at[0], at[1], 4.0))
+            .find(|i| {
+                pg.editable(i)
+                    && matches!(i.content, Content::Text(_))
+                    && geom::hit_item(i, at[0], at[1], 4.0)
+            })
             .cloned();
         if let Some(it) = hit
             && let Content::Text(t) = &it.content
@@ -679,24 +1201,33 @@ impl Editor {
                     if items[idx].content == Content::Text(new.clone()) {
                         return;
                     }
-                    items[idx] = Arc::new(Item {
-                        id,
-                        content: Content::Text(new),
-                    });
+                    let mut it = (*items[idx]).clone();
+                    it.content = Content::Text(new);
+                    items[idx] = Arc::new(it);
                 }
             }
             None => {
                 if trimmed.is_empty() {
                     return;
                 }
-                items.push(Arc::new(Item::new(Content::Text(TextBox {
+                let layer = self
+                    .active_layer
+                    .get(&self.doc.pages[te.page].id)
+                    .copied()
+                    .filter(|id| self.doc.pages[te.page].layer(*id).is_some())
+                    .or_else(|| self.doc.pages[te.page].layers.last().map(|l| l.id))
+                    .unwrap_or(0);
+                let items = &mut self.doc.pages[te.page].items;
+                let mut item = Item::new(Content::Text(TextBox {
                     x: te.x,
                     y: te.y,
                     w: te.w,
                     text: trimmed,
                     size: te.size,
                     color: te.color,
-                }))));
+                }));
+                item.layer = layer;
+                items.push(Arc::new(item));
             }
         }
         self.commit(before);
@@ -704,6 +1235,9 @@ impl Editor {
 
     pub fn set_tool(&mut self, t: Tool) {
         if self.tool != t {
+            if t == Tool::Eraser {
+                self.prev_tool = self.tool;
+            }
             self.finish_text();
             if t != Tool::Lasso {
                 self.selection = None;

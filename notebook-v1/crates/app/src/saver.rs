@@ -53,7 +53,7 @@ fn process(store: &Store, batch: Vec<Job>, done_tx: &Sender<String>) {
     for j in rest {
         match j {
             Job::Thumb(id, page) => {
-                let png = render::render_png(&page, 320);
+                let png = render::render_png_with(&page, 320, store);
                 let _ = store.save_thumb(id, &png);
                 let _ = done_tx.send(format!("thumb:{id}"));
             }

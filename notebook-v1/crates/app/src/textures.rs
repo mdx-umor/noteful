@@ -2,6 +2,7 @@
 
 use crate::theme::Palette;
 use egui::{ColorImage, Sense, TextureHandle, TextureOptions, Ui, vec2};
+use notebook_core::assets::AssetSource;
 use notebook_core::render;
 use notebook_core::{Id, Page, Paper, Template};
 use std::collections::HashMap;
@@ -22,6 +23,11 @@ fn page_key(p: &Page) -> u64 {
     let mut h = DefaultHasher::new();
     p.template.hash(&mut h);
     p.paper.hash(&mut h);
+    p.background.hash(&mut h);
+    (p.w as u32, p.h as u32).hash(&mut h);
+    for l in &p.layers {
+        (l.id, l.visible).hash(&mut h);
+    }
     for it in &p.items {
         (Arc::as_ptr(it) as usize).hash(&mut h);
     }
@@ -40,7 +46,12 @@ impl PageThumbs {
         self.budget = 2;
     }
 
-    pub fn get(&mut self, ctx: &egui::Context, page: &Page) -> Option<TextureHandle> {
+    pub fn get(
+        &mut self,
+        ctx: &egui::Context,
+        page: &Page,
+        assets: &dyn AssetSource,
+    ) -> Option<TextureHandle> {
         let key = page_key(page);
         match self.map.get(&page.id) {
             Some((k, t)) if *k == key => return Some(t.clone()),
@@ -52,7 +63,7 @@ impl PageThumbs {
             _ => {}
         }
         self.budget -= 1;
-        let tex = to_texture(ctx, "page-thumb", render::render_rgba(page, 240));
+        let tex = to_texture(ctx, "page-thumb", render::render_rgba_with(page, 240, assets));
         self.map.insert(page.id, (key, tex.clone()));
         ctx.request_repaint();
         Some(tex)
@@ -82,6 +93,16 @@ pub fn template_texture(ctx: &egui::Context, t: Template, p: Paper) -> TextureHa
 
 /// Grid of template previews. Returns true when the choice changed.
 pub fn template_picker(ui: &mut Ui, value: &mut Template, paper: Paper, pal: &Palette) -> bool {
+    template_picker_cols(ui, value, paper, pal, 3)
+}
+
+pub fn template_picker_cols(
+    ui: &mut Ui,
+    value: &mut Template,
+    paper: Paper,
+    pal: &Palette,
+    cols: usize,
+) -> bool {
     let mut changed = false;
     egui::Grid::new(ui.next_auto_id())
         .spacing(vec2(8.0, 8.0))
@@ -117,7 +138,7 @@ pub fn template_picker(ui: &mut Ui, value: &mut Template, paper: Paper, pal: &Pa
                     *value = *t;
                     changed = true;
                 }
-                if i % 3 == 2 {
+                if i % cols == cols - 1 {
                     ui.end_row();
                 }
             }

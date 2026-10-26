@@ -1,11 +1,17 @@
 //! CPU rasteriser (tiny-skia) for thumbnails, page previews and PNG export.
 
+use crate::assets::{AssetSource, NoAssets, RgbaImage};
 use crate::ink::{self, Sample};
-use crate::model::{Content, Item, Page, Paper, Rgba, Shape, ShapeKind, Template, TextBox};
+use crate::model::{
+    Content, ImageBox, Item, ItemKind, Page, Paper, Rgba, Shape, ShapeKind, Tape, Template,
+    TextBox,
+};
 use crate::templates::{Prim, template_prims};
 use crate::text;
 use ab_glyph::{Font, ScaleFont, point};
-use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Transform};
+use tiny_skia::{
+    FillRule, FilterQuality, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint, Transform,
+};
 
 fn paint(c: Rgba) -> Paint<'static> {
     let mut p = Paint::default();
@@ -70,11 +76,24 @@ pub fn paint_paper(
     h: f32,
     tf: Transform,
 ) {
+    paint_paper_weighted(pix, template, paper, w, h, tf, 1.0);
+}
+
+/// Like [`paint_paper`] with line thickness scaled by `weight` (bolder for small previews).
+pub fn paint_paper_weighted(
+    pix: &mut Pixmap,
+    template: Template,
+    paper: Paper,
+    w: f32,
+    h: f32,
+    tf: Transform,
+    weight: f32,
+) {
     let bg = paper.background();
     if let Some(r) = tiny_skia::Rect::from_xywh(0.0, 0.0, w, h) {
         pix.fill_rect(r, &paint(bg), tf, None);
     }
-    for p in template_prims(template, w, h, 1.0) {
+    for p in template_prims(template, w, h, weight) {
         match p {
             Prim::Line { a, b, w, margin } => polyline(
                 pix,
@@ -105,6 +124,96 @@ pub fn paint_paper(
     }
 }
 
+fn fill_poly(pix: &mut Pixmap, pts: &[[f32; 2]], c: Rgba, tf: Transform) {
+    if pts.len() < 3 {
+        return;
+    }
+    let mut pb = PathBuilder::new();
+    pb.move_to(pts[0][0], pts[0][1]);
+    for p in &pts[1..] {
+        pb.line_to(p[0], p[1]);
+    }
+    pb.close();
+    if let Some(path) = pb.finish() {
+        pix.fill_path(&path, &paint(c), FillRule::Winding, tf, None);
+    }
+}
+
+/// Shape fill colour: a light tint, or the colour itself for solid shapes.
+pub fn fill_color(sh: &Shape, fill: Rgba) -> Rgba {
+    if sh.solid {
+        Rgba(fill.0, fill.1, fill.2, 255)
+    } else {
+        Rgba(fill.0, fill.1, fill.2, 64)
+    }
+}
+
+fn tape(pix: &mut Pixmap, t: &Tape, tf: Transform) {
+    let (pts, closed) = crate::geom::tape_outline(t);
+    if t.revealed {
+        let mut outline = pts.clone();
+        if closed && let Some(f) = pts.first() {
+            outline.push(*f);
+        }
+        polyline(pix, &outline, 0.8, Rgba(t.color.0, t.color.1, t.color.2, 200), tf);
+        return;
+    }
+    if closed {
+        fill_poly(pix, &pts, t.color, tf);
+    } else {
+        let mut p = paint(t.color);
+        p.anti_alias = true;
+        let mut pb = PathBuilder::new();
+        if let Some(f) = pts.first() {
+            pb.move_to(f[0], f[1]);
+            if pts.len() == 1 {
+                pb.line_to(f[0] + 0.01, f[1]);
+            }
+            for q in &pts[1..] {
+                pb.line_to(q[0], q[1]);
+            }
+        }
+        if let Some(path) = pb.finish() {
+            let st = tiny_skia::Stroke {
+                width: t.width,
+                line_cap: LineCap::Butt,
+                line_join: LineJoin::Round,
+                ..Default::default()
+            };
+            pix.stroke_path(&path, &p, &st, tf, None);
+        }
+    }
+}
+
+fn picture(pix: &mut Pixmap, img: Option<&RgbaImage>, r: [f32; 4], tf: Transform) {
+    let [x, y, w, h] = r;
+    let Some(img) = img else {
+        if let Some(rect) = tiny_skia::Rect::from_xywh(x, y, w.max(1.0), h.max(1.0)) {
+            pix.fill_rect(rect, &paint(Rgba(200, 204, 212, 255)), tf, None);
+        }
+        return;
+    };
+    let Some(src) = tiny_skia::IntSize::from_wh(img.w, img.h)
+        .and_then(|sz| Pixmap::from_vec(img.px.clone(), sz))
+    else {
+        return;
+    };
+    let t = tf
+        .pre_translate(x, y)
+        .pre_scale(w / img.w as f32, h / img.h as f32);
+    pix.draw_pixmap(
+        0,
+        0,
+        src.as_ref(),
+        &PixmapPaint {
+            quality: FilterQuality::Bilinear,
+            ..Default::default()
+        },
+        t,
+        None,
+    );
+}
+
 fn shape(pix: &mut Pixmap, sh: &Shape, tf: Transform) {
     if let Some(fill) = sh.fill {
         let (pts, closed) = crate::geom::shape_outline(sh);
@@ -116,13 +225,7 @@ fn shape(pix: &mut Pixmap, sh: &Shape, tf: Transform) {
             }
             pb.close();
             if let Some(path) = pb.finish() {
-                pix.fill_path(
-                    &path,
-                    &paint(Rgba(fill.0, fill.1, fill.2, 64)),
-                    FillRule::Winding,
-                    tf,
-                    None,
-                );
+                pix.fill_path(&path, &paint(fill_color(sh, fill)), FillRule::Winding, tf, None);
             }
         }
     }
@@ -179,39 +282,111 @@ fn text_box(pix: &mut Pixmap, t: &TextBox, scale: f32, ox: f32, oy: f32) {
 }
 
 pub fn paint_item(pix: &mut Pixmap, it: &Item, paper: Paper, scale: f32) {
+    paint_item_with(pix, it, paper, scale, &NoAssets, false);
+}
+
+fn paint_item_with(
+    pix: &mut Pixmap,
+    it: &Item,
+    paper: Paper,
+    scale: f32,
+    a: &dyn AssetSource,
+    see_through: bool,
+) {
     let tf = Transform::from_scale(scale, scale);
     match &it.content {
+        Content::Stroke(s) if see_through && s.pen == crate::model::PenKind::Highlighter => {
+            let pts: Vec<[f32; 2]> = ink::samples(s).iter().map(|q| [q.x, q.y]).collect();
+            let mut pb = PathBuilder::new();
+            if let Some(f) = pts.first() {
+                pb.move_to(f[0], f[1]);
+                if pts.len() == 1 {
+                    pb.line_to(f[0] + 0.01, f[1]);
+                }
+                for q in &pts[1..] {
+                    pb.line_to(q[0], q[1]);
+                }
+            }
+            if let Some(path) = pb.finish() {
+                let mut p = paint(ink::highlight_tint(s.color));
+                p.blend_mode = tiny_skia::BlendMode::Multiply;
+                let st = tiny_skia::Stroke {
+                    width: s.width,
+                    line_cap: LineCap::Butt,
+                    line_join: LineJoin::Round,
+                    ..Default::default()
+                };
+                pix.stroke_path(&path, &p, &st, tf, None);
+            }
+        }
         Content::Stroke(s) => ink(pix, &ink::samples(s), ink::ink_color(s, paper), tf),
         Content::Shape(sh) => shape(pix, sh, tf),
         Content::Text(t) => text_box(pix, t, scale, 0.0, 0.0),
+        Content::Tape(t) => tape(pix, t, tf),
+        Content::Image(ImageBox { asset, x, y, w, h }) => {
+            let img = a.image(*asset);
+            picture(pix, img.as_deref(), [*x, *y, *w, *h], tf)
+        }
     }
 }
 
-/// Renders a page `width_px` pixels wide.
+/// Renders a page `width_px` pixels wide (pictures as placeholders).
 pub fn render_page(page: &Page, width_px: u32) -> Pixmap {
+    render_page_with(page, width_px, &NoAssets)
+}
+
+/// Drawing order within a layer: pictures, highlighter, ink and text, then tape on top.
+pub fn layer_order(kind: ItemKind) -> u8 {
+    match kind {
+        ItemKind::Image => 0,
+        ItemKind::Highlight => 1,
+        ItemKind::Tape => 3,
+        _ => 2,
+    }
+}
+
+pub fn render_page_with(page: &Page, width_px: u32, assets: &dyn AssetSource) -> Pixmap {
     let scale = width_px as f32 / page.w;
     let h = (page.h * scale).round().max(1.0) as u32;
     let mut pix = Pixmap::new(width_px.max(1), h).expect("pixmap");
-    paint_paper(
-        &mut pix,
-        page.template,
-        page.paper,
-        page.w,
-        page.h,
-        Transform::from_scale(scale, scale),
-    );
-    for it in page.items.iter().filter(|i| i.is_highlighter()) {
-        paint_item(&mut pix, it, page.paper, scale);
+    let tf = Transform::from_scale(scale, scale);
+    paint_paper(&mut pix, page.template, page.paper, page.w, page.h, tf);
+    if let Some(bg) = page.background {
+        picture(&mut pix, assets.image(bg).as_deref(), [0.0, 0.0, page.w, page.h], tf);
     }
-    for it in page.items.iter().filter(|i| !i.is_highlighter()) {
-        paint_item(&mut pix, it, page.paper, scale);
+    let first = page.layers.first().map_or(0, |l| l.id);
+    let layer_ids: Vec<u64> = if page.layers.is_empty() {
+        vec![first]
+    } else {
+        page.layers.iter().filter(|l| l.visible).map(|l| l.id).collect()
+    };
+    let known: Vec<u64> = page.layers.iter().map(|l| l.id).collect();
+    let see_through = page.has_pictures();
+    for lid in layer_ids {
+        let in_layer = |it: &&std::sync::Arc<Item>| {
+            it.layer == lid || (lid == first && !known.contains(&it.layer))
+        };
+        for pass in 0..4 {
+            for it in page
+                .items
+                .iter()
+                .filter(in_layer)
+                .filter(|i| layer_order(i.kind()) == pass)
+            {
+                paint_item_with(&mut pix, it, page.paper, scale, assets, see_through);
+            }
+        }
     }
     pix
 }
 
 /// Straight RGBA bytes (pages are opaque, so premultiplied equals straight).
 pub fn render_rgba(page: &Page, width_px: u32) -> (u32, u32, Vec<u8>) {
-    let pix = render_page(page, width_px);
+    render_rgba_with(page, width_px, &NoAssets)
+}
+
+pub fn render_rgba_with(page: &Page, width_px: u32, a: &dyn AssetSource) -> (u32, u32, Vec<u8>) {
+    let pix = render_page_with(page, width_px, a);
     (pix.width(), pix.height(), pix.data().to_vec())
 }
 
@@ -219,10 +394,29 @@ pub fn render_png(page: &Page, width_px: u32) -> Vec<u8> {
     render_page(page, width_px).encode_png().unwrap_or_default()
 }
 
+pub fn render_png_with(page: &Page, width_px: u32, a: &dyn AssetSource) -> Vec<u8> {
+    render_page_with(page, width_px, a)
+        .encode_png()
+        .unwrap_or_default()
+}
+
 /// Small preview of a blank page with a template, for pickers.
 pub fn template_preview(template: Template, paper: Paper, width_px: u32) -> (u32, u32, Vec<u8>) {
     let page = Page::new(template, paper);
-    render_rgba(&page, width_px)
+    let scale = width_px as f32 / page.w;
+    let h = (page.h * scale).round().max(1.0) as u32;
+    let mut pix = Pixmap::new(width_px.max(1), h).expect("pixmap");
+    let weight = (1.0 / scale).clamp(1.0, 4.0);
+    paint_paper_weighted(
+        &mut pix,
+        template,
+        paper,
+        page.w,
+        page.h,
+        Transform::from_scale(scale, scale),
+        weight,
+    );
+    (pix.width(), pix.height(), pix.data().to_vec())
 }
 
 #[cfg(test)]

@@ -48,6 +48,8 @@ pub enum Icon {
     Gear,
     Chevron,
     ChevronRight,
+    Tape,
+    Sticker,
 }
 
 fn poly(p: &Painter, pts: &[Pos2], s: Stroke) {
@@ -75,6 +77,33 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
     use std::f32::consts::PI;
     match icon {
         Icon::Back => poly(p, &[q(15.0, 5.0), q(8.0, 12.0), q(15.0, 19.0)], s),
+        Icon::Tape => {
+            // A strip of washi tape at an angle, with stripes.
+            let pts = [q(3.0, 15.0), q(15.0, 3.0), q(21.0, 9.0), q(9.0, 21.0), q(3.0, 15.0)];
+            p.add(Shape::convex_polygon(
+                pts[..4].to_vec(),
+                color.gamma_multiply(0.25),
+                Stroke::NONE,
+            ));
+            poly(p, &pts, s);
+            for k in 0..3 {
+                let o = k as f32 * 4.0;
+                line((8.0 + o, 10.0 - o), (13.0 + o, 15.0 - o));
+            }
+        }
+        Icon::Sticker => {
+            // Star with a peeled corner.
+            let star: Vec<Pos2> = (0..10)
+                .map(|i| {
+                    let a = -PI / 2.0 + i as f32 * PI / 5.0;
+                    let r = if i % 2 == 0 { 9.0 } else { 4.0 };
+                    q(12.0 + r * a.cos(), 12.5 + r * a.sin())
+                })
+                .collect();
+            let mut closed = star.clone();
+            closed.push(star[0]);
+            poly(p, &closed, s);
+        }
         Icon::Chevron => poly(p, &[q(7.0, 10.0), q(12.0, 15.0), q(17.0, 10.0)], s),
         Icon::ChevronRight => poly(p, &[q(10.0, 7.0), q(15.0, 12.0), q(10.0, 17.0)], s),
         Icon::Pen => {

@@ -1,6 +1,7 @@
 //! Notebook v1: a handwriting notebook for iPad and Apple Pencil, written in Rust.
 
 mod app;
+mod assets;
 #[cfg(not(target_arch = "wasm32"))]
 mod applog;
 #[cfg(feature = "autotest")]
@@ -8,6 +9,7 @@ mod autotest;
 mod editor;
 mod icons;
 mod library_view;
+mod platform;
 mod prefs;
 mod saver;
 mod textures;

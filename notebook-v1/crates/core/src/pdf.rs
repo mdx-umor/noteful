@@ -2,7 +2,8 @@
 //! Typed text uses the built-in Helvetica font (Latin characters).
 
 use crate::ink;
-use crate::model::{Content, Document, Page, Rgba};
+use crate::model::{Content, Document, Id, Page, Rgba};
+use std::collections::HashMap;
 use crate::templates::{Prim, template_prims};
 use crate::text;
 use std::fmt::Write as _;
@@ -89,7 +90,7 @@ fn pdf_string(s: &str) -> String {
     out
 }
 
-fn page_content(page: &Page) -> String {
+fn page_content(page: &Page, images: &HashMap<Id, usize>) -> String {
     let mut s = String::new();
     // Flip to top-left origin so page coordinates can be used as-is.
     let _ = writeln!(s, "q 1 0 0 -1 0 {:.2} cm 1 J 1 j", page.h);
@@ -130,13 +131,67 @@ fn page_content(page: &Page) -> String {
             ),
         }
     }
-    let ordered = page
-        .items
-        .iter()
-        .filter(|i| i.is_highlighter())
-        .chain(page.items.iter().filter(|i| !i.is_highlighter()));
+    let place_image = |s: &mut String, id: Id, x: f32, y: f32, w: f32, h: f32| {
+        if let Some(k) = images.get(&id) {
+            let _ = writeln!(
+                s,
+                "q {:.2} 0 0 {:.2} {:.2} {:.2} cm /Im{k} Do Q",
+                w,
+                -h,
+                x,
+                y + h
+            );
+        }
+    };
+    if let Some(bg) = page.background {
+        place_image(&mut s, bg, 0.0, 0.0, page.w, page.h);
+    }
+    let first = page.layers.first().map_or(0, |l| l.id);
+    let known: Vec<Id> = page.layers.iter().map(|l| l.id).collect();
+    let layers: Vec<Id> = if page.layers.is_empty() {
+        vec![first]
+    } else {
+        page.layers.iter().filter(|l| l.visible).map(|l| l.id).collect()
+    };
+    let mut ordered = Vec::new();
+    for lid in layers {
+        for pass in 0..4 {
+            ordered.extend(page.items.iter().filter(|it| {
+                (it.layer == lid || (lid == first && !known.contains(&it.layer)))
+                    && crate::render::layer_order(it.kind()) == pass
+            }));
+        }
+    }
     for it in ordered {
         match &it.content {
+            Content::Image(im) => place_image(&mut s, im.asset, im.x, im.y, im.w, im.h),
+            Content::Tape(t) => {
+                let (pts, closed) = crate::geom::tape_outline(t);
+                if t.revealed {
+                    let mut o = pts.clone();
+                    if closed && let Some(f) = pts.first() {
+                        o.push(*f);
+                    }
+                    stroke_line(&mut s, &o, 0.6, t.color);
+                } else if closed {
+                    let _ = write!(s, "{} rg ", rgb(t.color));
+                    path(&mut s, &pts);
+                    s.push_str("h f\n");
+                } else {
+                    let _ = write!(s, "0 J {} RG {:.2} w ", rgb(t.color), t.width);
+                    path(&mut s, &pts);
+                    s.push_str("S 1 J\n");
+                }
+            }
+            Content::Stroke(st)
+                if st.pen == crate::model::PenKind::Highlighter && page.has_pictures() =>
+            {
+                // Real multiply blending so the picture shows through.
+                let pts: Vec<[f32; 2]> = ink::samples(st).iter().map(|q| [q.x, q.y]).collect();
+                s.push_str("q /GSM gs 0 J\n");
+                stroke_line(&mut s, &pts, st.width, ink::highlight_tint(st.color));
+                s.push_str("Q\n");
+            }
             Content::Stroke(st) => {
                 let c = ink::ink_color(st, page.paper);
                 let samples = ink::samples(st);
@@ -166,11 +221,12 @@ fn page_content(page: &Page) -> String {
                 if let Some(fill) = sh.fill {
                     let (pts, closed) = crate::geom::shape_outline(sh);
                     if closed && pts.len() > 2 {
-                        let _ = write!(
-                            s,
-                            "{} rg ",
-                            rgb(fill.mix_over(page.paper.background(), 0.25))
-                        );
+                        let c = if sh.solid {
+                            fill
+                        } else {
+                            fill.mix_over(page.paper.background(), 0.25)
+                        };
+                        let _ = write!(s, "{} rg ", rgb(c));
                         path(&mut s, &pts);
                         s.push_str("h f\n");
                     }
@@ -201,10 +257,51 @@ fn page_content(page: &Page) -> String {
     s
 }
 
-/// Builds a complete PDF file for a notebook.
+/// Builds a complete PDF file for a notebook (pictures left out).
 pub fn export(doc: &Document, title: &str) -> Vec<u8> {
+    export_with(doc, title, &|_| None)
+}
+
+/// Builds a complete PDF file; `asset` returns the JPEG bytes of a picture.
+pub fn export_with(doc: &Document, title: &str, asset: &dyn Fn(Id) -> Option<Vec<u8>>) -> Vec<u8> {
     let mut objects: Vec<Vec<u8>> = Vec::new();
     let n = doc.pages.len();
+    // Pictures become image objects after the pages.
+    let mut image_objs: Vec<Vec<u8>> = Vec::new();
+    let mut images: HashMap<Id, usize> = HashMap::new();
+    for id in doc.asset_ids() {
+        let Some(bytes) = asset(id) else { continue };
+        let (Some((w, h)), Some(comps)) = (
+            crate::assets::jpeg_size(&bytes),
+            crate::assets::jpeg_components(&bytes),
+        ) else {
+            continue;
+        };
+        let cs = match comps {
+            1 => "/DeviceGray",
+            3 => "/DeviceRGB",
+            _ => continue,
+        };
+        let mut obj = format!(
+            "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace {cs} /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
+            bytes.len()
+        )
+        .into_bytes();
+        obj.extend_from_slice(&bytes);
+        obj.extend_from_slice(b"\nendstream");
+        images.insert(id, image_objs.len());
+        image_objs.push(obj);
+    }
+    let image_obj = |k: usize| 5 + n * 2 + k;
+    let gs_obj = 5 + n * 2 + image_objs.len();
+    let xobjects: String = {
+        let mut v: Vec<(usize, Id)> = images.iter().map(|(id, k)| (*k, *id)).collect();
+        v.sort();
+        v.iter()
+            .map(|(k, _)| format!("/Im{k} {} 0 R", image_obj(*k)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     // 1 catalog, 2 pages tree, 3 font, 4 info, then a page + content pair per page.
     let page_obj = |i: usize| 5 + i * 2;
     objects.push(b"<< /Type /Catalog /Pages 2 0 R >>".to_vec());
@@ -220,19 +317,23 @@ pub fn export(doc: &Document, title: &str) -> Vec<u8> {
     for (i, page) in doc.pages.iter().enumerate() {
         objects.push(
             format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.2} {:.2}] /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.2} {:.2}] /Resources << /Font << /F1 3 0 R >> /XObject << {} >> /ExtGState << /GSM {} 0 R >> >> /Contents {} 0 R >>",
                 page.w,
                 page.h,
+                xobjects,
+                gs_obj,
                 page_obj(i) + 1
             )
             .into_bytes(),
         );
-        let content = page_content(page);
+        let content = page_content(page, &images);
         let mut obj = format!("<< /Length {} >>\nstream\n", content.len()).into_bytes();
         obj.extend_from_slice(content.as_bytes());
         obj.extend_from_slice(b"\nendstream");
         objects.push(obj);
     }
+    objects.extend(image_objs);
+    objects.push(b"<< /Type /ExtGState /BM /Multiply /CA 1 /ca 1 >>".to_vec());
 
     let mut out = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
     let mut offsets = Vec::with_capacity(objects.len());
