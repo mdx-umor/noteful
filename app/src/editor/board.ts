@@ -1143,17 +1143,44 @@ function drawColor(st: Stroke, paper: Paper): string {
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
-/** Removes the part of a stroke inside the eraser circle, keeping the rest. */
+/**
+ * Removes the part of a stroke under the eraser circle. Works on the stroke as it is
+ * drawn (smoothed samples with their real widths), cuts exactly where the ink meets
+ * the circle, and stores the pieces with explicit widths so they look exactly the
+ * same as before: no re-tapering, no jumps in thickness.
+ */
 function splitStroke(s: Stroke, c: Pt, r: number): Stroke[] {
-  const reach = r + s.width / 2;
-  const parts: InkPoint[][] = [];
-  let cur: InkPoint[] = [];
-  for (const p of s.points) {
-    if (Math.hypot(p.x - c[0], p.y - c[1]) <= reach) {
-      if (cur.length > 1) parts.push(cur);
+  const ss = samples(s);
+  // Ink at a sample is erased when the eraser touches it (centre within r + w/2).
+  const reach = (w: number) => r + w / 2;
+  const inside = (q: { x: number; y: number; w: number }) => Math.hypot(q.x - c[0], q.y - c[1]) < reach(q.w);
+  // Point where the segment a→b crosses the reach circle.
+  const cross = (a: typeof ss[0], b: typeof ss[0]) => {
+    const R = reach((a.w + b.w) / 2);
+    const dx = b.x - a.x, dy = b.y - a.y, fx = a.x - c[0], fy = a.y - c[1];
+    const A = dx * dx + dy * dy, B = 2 * (fx * dx + fy * dy), C = fx * fx + fy * fy - R * R;
+    const disc = Math.max(0, B * B - 4 * A * C);
+    const roots = [(-B - Math.sqrt(disc)) / (2 * A || 1), (-B + Math.sqrt(disc)) / (2 * A || 1)].filter((t) => t >= 0 && t <= 1);
+    const t = inside(a) ? Math.max(...roots, 0) : Math.min(...roots, 1);
+    return { x: a.x + dx * t, y: a.y + dy * t, w: a.w + (b.w - a.w) * t };
+  };
+  const pieces: (typeof ss)[] = [];
+  let cur: typeof ss = [];
+  for (let i = 0; i < ss.length; i++) {
+    const q = ss[i];
+    const prev = ss[i - 1];
+    if (inside(q)) {
+      if (prev && !inside(prev)) cur.push(cross(prev, q));
+      if (cur.length > 1) pieces.push(cur);
       cur = [];
-    } else cur.push(p);
+    } else {
+      if (prev && inside(prev)) cur.push(cross(prev, q));
+      cur.push(q);
+    }
   }
-  if (cur.length > 1) parts.push(cur);
-  return parts.map((points) => ({ ...s, points }));
+  if (cur.length > 1) pieces.push(cur);
+  // Drop crumbs too small to see.
+  return pieces
+    .filter((p) => p.reduce((len, q, k) => len + (k ? Math.hypot(q.x - p[k - 1].x, q.y - p[k - 1].y) : 0), 0) > 0.6)
+    .map((p) => ({ ...s, points: p.map((q) => ({ x: q.x, y: q.y, p: 0.5 })), widths: p.map((q) => q.w) }));
 }

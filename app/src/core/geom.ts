@@ -148,7 +148,7 @@ export function itemInLasso(it: Item, poly: Pt[]): boolean {
 export function transformItem(it: Item, f: (x: number, y: number) => Pt, s: number): Item {
   const c = it.content;
   if ("Stroke" in c)
-    return { ...it, content: { Stroke: { ...c.Stroke, width: c.Stroke.width * s, points: c.Stroke.points.map((p) => { const q = f(p.x, p.y); return { x: q[0], y: q[1], p: p.p }; }) } } };
+    return { ...it, content: { Stroke: { ...c.Stroke, width: c.Stroke.width * s, widths: c.Stroke.widths?.map((w) => w * s), points: c.Stroke.points.map((p) => { const q = f(p.x, p.y); return { x: q[0], y: q[1], p: p.p }; }) } } };
   if ("Shape" in c)
     return { ...it, content: { Shape: { ...c.Shape, width: c.Shape.width * s, points: c.Shape.points.map((p) => f(p[0], p[1])) } } };
   if ("Text" in c) {

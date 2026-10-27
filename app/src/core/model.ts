@@ -21,7 +21,14 @@ export const now = () => Date.now();
 
 export type PenKind = "Fineliner" | "Fountain" | "Brush" | "Highlighter";
 export interface InkPoint { x: number; y: number; p: number }
-export interface Stroke { pen: PenKind; color: Rgba; width: number; points: InkPoint[] }
+export interface Stroke {
+  pen: PenKind;
+  color: Rgba;
+  width: number;
+  points: InkPoint[];
+  /** Exact width per point: set on pieces left by the precise eraser so they keep their shape. */
+  widths?: number[];
+}
 
 export type ShapeKind = "Line" | "Arrow" | "Rect" | "Ellipse" | "Polygon";
 export interface Shape {

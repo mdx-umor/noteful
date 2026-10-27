@@ -30,6 +30,8 @@ function widthAt(s: Stroke, pressure: number, dir: number, taper: number): numbe
 
 /** Evenly spaced samples along a Catmull-Rom curve through the stroke's points. */
 export function samples(s: Stroke): Sample[] {
+  if (s.widths && s.widths.length === s.points.length)
+    return s.points.map((p, i) => ({ x: p.x, y: p.y, w: s.widths![i] }));
   const pts: [number, number, number][] = [];
   for (const p of s.points) {
     const l = pts[pts.length - 1];
@@ -97,43 +99,42 @@ export function displayColor(c: Rgba, paper: Paper): Rgba {
   return c;
 }
 
-/** Adds a variable-width ribbon with round ends to a path (filled with nonzero). */
+/**
+ * Adds a variable-width stroke to a path as a union of pieces: one quad per segment
+ * and a disc at the ends and wherever the line bends. Every piece winds the same
+ * way, so a nonzero fill gives a solid shape with no holes or notches, however
+ * sharply the line turns. `roundCaps` = false leaves the two ends flat.
+ */
 export function ribbonPath(path: Path2D, ss: Sample[], roundCaps = true) {
   const n = ss.length;
   if (n === 0) return;
-  if (n === 1) {
-    path.moveTo(ss[0].x + ss[0].w / 2, ss[0].y);
-    path.arc(ss[0].x, ss[0].y, ss[0].w / 2, 0, Math.PI * 2);
-    return;
+  const disc = (s: Sample) => {
+    const r = s.w / 2;
+    path.moveTo(s.x + r, s.y);
+    path.arc(s.x, s.y, r, 0, Math.PI * 2, false); // positive (clockwise on screen)
+  };
+  if (n === 1) { disc(ss[0]); return; }
+  for (let i = 0; i < n - 1; i++) {
+    const a = ss[i], b = ss[i + 1];
+    let dx = b.x - a.x, dy = b.y - a.y;
+    const l = Math.hypot(dx, dy);
+    if (l < 1e-6) continue;
+    dx /= l; dy /= l;
+    const ha = a.w / 2, hb = b.w / 2;
+    // Quad a-left, b-left, b-right, a-right; this order has positive area.
+    path.moveTo(a.x + dy * ha, a.y - dx * ha);
+    path.lineTo(b.x + dy * hb, b.y - dx * hb);
+    path.lineTo(b.x - dy * hb, b.y + dx * hb);
+    path.lineTo(a.x - dy * ha, a.y + dx * ha);
+    path.closePath();
   }
-  const left: Pt[] = [], right: Pt[] = [];
-  for (let i = 0; i < n; i++) {
-    const a = ss[Math.max(0, i - 1)], b = ss[Math.min(n - 1, i + 1)];
-    let tx = b.x - a.x, ty = b.y - a.y;
-    const l = Math.hypot(tx, ty) || 1e-6;
-    tx /= l; ty /= l;
-    const h = ss[i].w / 2;
-    left.push([ss[i].x - ty * h, ss[i].y + tx * h]);
-    right.push([ss[i].x + ty * h, ss[i].y - tx * h]);
-  }
-  path.moveTo(left[0][0], left[0][1]);
-  for (let i = 1; i < n; i++) path.lineTo(left[i][0], left[i][1]);
-  for (let i = n - 1; i >= 0; i--) path.lineTo(right[i][0], right[i][1]);
-  path.closePath();
-  if (!roundCaps) return;
-  for (const s of [ss[0], ss[n - 1]]) {
-    path.moveTo(s.x + s.w / 2, s.y);
-    path.arc(s.x, s.y, s.w / 2, 0, Math.PI * 2);
-  }
-  // Round joins where the line turns sharply.
+  if (roundCaps) { disc(ss[0]); disc(ss[n - 1]); }
+  // Discs fill the wedge-shaped gaps where consecutive segments meet at an angle.
   for (let i = 1; i < n - 1; i++) {
     const a = ss[i - 1], b = ss[i], c = ss[i + 1];
     const ux = b.x - a.x, uy = b.y - a.y, vx = c.x - b.x, vy = c.y - b.y;
-    const cos = (ux * vx + uy * vy) / Math.max(1e-6, Math.hypot(ux, uy) * Math.hypot(vx, vy));
-    if (cos < 0.8) {
-      path.moveTo(b.x + b.w / 2, b.y);
-      path.arc(b.x, b.y, b.w / 2, 0, Math.PI * 2);
-    }
+    const cos = (ux * vx + uy * vy) / Math.max(1e-9, Math.hypot(ux, uy) * Math.hypot(vx, vy));
+    if (cos < 0.998 || b.w > 3) disc(b);
   }
 }
 
