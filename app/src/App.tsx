@@ -49,6 +49,9 @@ export function App() {
       l = store.createNotebook(l, store.welcomeDoc(), "Welcome to Notebook", fromHex("#5b5bd6"), null, ["Sample"]);
     }
     setLibState(l);
+    // Daily automatic backup on this device, a few seconds after start.
+    const t = window.setTimeout(() => { store.autoBackup().catch(() => {}); }, 4000);
+    return () => clearTimeout(t);
   }, [toast]);
 
   // Keep the screen awake while writing, if asked.

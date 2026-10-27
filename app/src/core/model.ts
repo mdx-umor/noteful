@@ -28,6 +28,8 @@ export interface Stroke {
   points: InkPoint[];
   /** Exact width per point: set on pieces left by the precise eraser so they keep their shape. */
   widths?: number[];
+  /** Written while recording: which recording, and how many seconds in. */
+  audio?: { rec: Id; t: number };
 }
 
 export type ShapeKind = "Line" | "Arrow" | "Rect" | "Ellipse" | "Polygon";
@@ -43,7 +45,11 @@ export interface Shape {
 }
 export interface TextBox { x: number; y: number; w: number; text: string; size: number; color: Rgba }
 export interface Tape { points: [number, number][]; width: number; color: Rgba; rect?: boolean; revealed?: boolean }
-export interface ImageBox { asset: Id; x: number; y: number; w: number; h: number }
+export interface ImageBox {
+  asset: Id; x: number; y: number; w: number; h: number;
+  /** Visible part of the picture, as fractions [x, y, w, h] of its full size. */
+  crop?: [number, number, number, number] | null;
+}
 
 export type Content =
   | { Stroke: Stroke }
@@ -91,17 +97,19 @@ export function newItem(content: Content, layer: Id = 0): Item {
 
 export type Template =
   | "Blank" | "Lined" | "Narrow" | "Grid" | "Dotted" | "Cornell" | "Todo" | "Music"
-  | "Storyboard" | "Ruled" | "MarginRight" | "Columns2" | "Columns3";
+  | "Storyboard" | "Ruled" | "MarginRight" | "Columns2" | "Columns3"
+  | "Handwriting" | "GuitarTab" | "Isometric" | "Weekly";
 
 export const TEMPLATES: Template[] = [
   "Blank", "Ruled", "Lined", "MarginRight", "Narrow", "Grid", "Dotted", "Cornell",
-  "Columns2", "Columns3", "Todo", "Music", "Storyboard",
+  "Columns2", "Columns3", "Todo", "Weekly", "Handwriting", "Isometric", "Music", "GuitarTab", "Storyboard",
 ];
 export const TEMPLATE_NAMES: Record<Template, string> = {
   Blank: "Blank", Ruled: "Ruled", Lined: "Margin", MarginRight: "Margin right",
   Narrow: "Narrow ruled", Grid: "Grid", Dotted: "Dotted", Cornell: "Cornell",
   Columns2: "2 Columns", Columns3: "3 Columns", Todo: "To-do", Music: "Music",
-  Storyboard: "Storyboard",
+  Storyboard: "Storyboard", Handwriting: "Handwriting", GuitarTab: "Guitar TAB",
+  Isometric: "Isometric", Weekly: "Weekly planner",
 };
 
 export type Paper =
@@ -152,10 +160,13 @@ export interface Page {
   bookmark?: string | null;
   layers: Layer[];
   background?: Id | null;
+  /** Recognised handwriting, for search. `key` says which ink it was made from. */
+  ocr?: { key: string; text: string } | null;
 }
 
 export interface OutlineEntry { id: Id; title: string; page: Id; level: number }
-export interface Doc { id: Id; pages: Page[]; outline: OutlineEntry[] }
+export interface RecordingMeta { id: Id; title: string; duration: number; created: number; mime: string }
+export interface Doc { id: Id; pages: Page[]; outline: OutlineEntry[]; recordings?: RecordingMeta[] }
 export interface Sticker { id: Id; items: Item[]; used: number }
 
 export const firstLayer = (): Layer => ({ id: 0, name: "Layer 1", visible: true, locked: false });
@@ -178,7 +189,7 @@ export function normalizeDoc(d: Doc): Doc {
     const items = (p.items ?? []).map((it) => (ids.has(it.layer ?? 0) ? { ...it, layer: it.layer ?? 0 } : { ...it, layer: layers[0].id }));
     return { ...p, layers, items, bookmark: p.bookmark ?? null, background: p.background ?? null };
   });
-  return { id: d.id, pages, outline: d.outline ?? [] };
+  return { id: d.id, pages, outline: d.outline ?? [], recordings: d.recordings ?? [] };
 }
 
 export const layerOf = (p: Page, id: Id) => p.layers.find((l) => l.id === id);
@@ -206,6 +217,7 @@ export function searchText(d: Doc): string {
   for (const p of d.pages) {
     if (p.bookmark) out.push(p.bookmark);
     for (const it of p.items) if ("Text" in it.content) out.push(it.content.Text.text);
+    if (p.ocr?.text) out.push(p.ocr.text);
   }
   for (const o of d.outline) out.push(o.title);
   return out.join(" ").slice(0, 20000);

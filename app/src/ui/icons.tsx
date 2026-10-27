@@ -60,6 +60,9 @@ const P: Record<string, string> = {
   page: "M6 3h12v18H6zM9 8h6M9 12h6",
   download: "M12 4v12M7 11l5 5 5-5M5 20h14",
   upload: "M12 20V8M7 13l5-5 5 5M5 4h14",
+  mic: "M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3zM5 11a7 7 0 0014 0M12 18v3",
+  scan: "M4 8V4h4M16 4h4v4M4 16v4h4M20 16v4h-4M7 12h10",
+  magnifier: "M3 14h18v7H3zM8 5h8v5H8zM12 10v4",
 };
 
 export function Icon({ name, size = 22 }: { name: keyof typeof P | string; size?: number }) {

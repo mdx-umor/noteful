@@ -5,7 +5,7 @@ import type { Doc, Id, Page, Rgba } from "./model";
 import { assetIds, hasPictures, isDark, kindOf, paperBg, paperLine, paperMargin, mix } from "./model";
 import { highlightTint, inkColor, samples, shapePolylines } from "./ink";
 import { shapeOutline, tapeOutline, type Pt } from "./geom";
-import { templatePrims } from "./render";
+import { templatePrims, weeklyLabels } from "./render";
 import { LINE_HEIGHT, wrap } from "./text";
 import { loadAsset } from "./storage";
 import { jpegInfo } from "./pictures";
@@ -45,10 +45,13 @@ function pageContent(page: Page, images: Map<Id, number>): string {
   let s = `q 1 0 0 -1 0 ${f(page.h)} cm 1 J 1 j\n`;
   s += `${rgb(paperBg(page.paper))} rg 0 0 ${f(page.w)} ${f(page.h)} re f\n`;
   for (const p of templatePrims(page.template, page.w, page.h)) {
-    if (p.t === "line") s += strokeLine([p.a, p.b], p.w, p.margin ? paperMargin(page.paper) : paperLine(page.paper));
+    if (p.t === "line") s += (p.dashed ? "[4 4] 0 d " : "") + strokeLine([p.a, p.b], p.w, p.margin ? paperMargin(page.paper) : paperLine(page.paper)) + (p.dashed ? "[] 0 d\n" : "");
     else if (p.t === "dot") s += `${rgb(paperLine(page.paper))} rg ` + circle(p.c, p.r);
     else s += strokeLine([[p.x, p.y], [p.x + p.w, p.y], [p.x + p.w, p.y + p.h], [p.x, p.y + p.h], [p.x, p.y]], p.lw, paperLine(page.paper));
   }
+  if (page.template === "Weekly")
+    for (const l of weeklyLabels(page.w, page.h))
+      s += `${rgb(paperLine(page.paper))} rg BT /F1 11 Tf 1 0 0 -1 ${f(l.x)} ${f(l.y + 4)} Tm ${pdfString(l.text)} Tj ET\n`;
   const img = (id: Id, x: number, y: number, w: number, h: number) => {
     const k = images.get(id);
     if (k !== undefined) s += `q ${f(w)} 0 0 ${f(-h)} ${f(x)} ${f(y + h)} cm /Im${k} Do Q\n`;
@@ -61,7 +64,17 @@ function pageContent(page: Page, images: Map<Id, number>): string {
     for (let pass = 0; pass < 4; pass++) for (const it of items) {
       if (order[kindOf(it)] !== pass) continue;
       const c = it.content;
-      if ("Image" in c) img(c.Image.asset, c.Image.x, c.Image.y, c.Image.w, c.Image.h);
+      if ("Image" in c) {
+        const im = c.Image;
+        if (im.crop) {
+          // Clip to the visible box, then place the whole picture so the crop lines up.
+          const [cx, cy, cw, ch] = im.crop;
+          const fw = im.w / cw, fh = im.h / ch;
+          s += `q ${f(im.x)} ${f(im.y)} ${f(im.w)} ${f(im.h)} re W n\n`;
+          img(im.asset, im.x - cx * fw, im.y - cy * fh, fw, fh);
+          s += "Q\n";
+        } else img(im.asset, im.x, im.y, im.w, im.h);
+      }
       else if ("Tape" in c) {
         const t = c.Tape;
         const [pts, closed] = tapeOutline(t);

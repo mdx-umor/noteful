@@ -208,3 +208,6 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .side-panel { position: absolute; right: 0; top: 0; bottom: 0; z-index: 6; box-shadow: var(--shadow); }
   .ed-title { max-width: 30vw; }
 }
+
+.zoom-window { position: absolute; left: 0; right: 0; bottom: 0; height: 34%; min-height: 170px; background: var(--panel); z-index: 4; display: flex; flex-direction: column; border-top: 1px solid var(--line); box-shadow: 0 -6px 24px rgba(0,0,0,0.3); padding-bottom: env(safe-area-inset-bottom); }
+.zoom-canvas { flex: 1; position: relative; margin: 0 8px 8px; border-radius: 10px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--line); }

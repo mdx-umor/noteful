@@ -8,7 +8,7 @@ import { shapeOutline, tapeOutline, type Pt } from "./geom";
 import { FONT_FAMILY, LINE_HEIGHT, wrap } from "./text";
 
 export type Prim =
-  | { t: "line"; a: Pt; b: Pt; w: number; margin?: boolean }
+  | { t: "line"; a: Pt; b: Pt; w: number; margin?: boolean; dashed?: boolean }
   | { t: "dot"; c: Pt; r: number }
   | { t: "rect"; x: number; y: number; w: number; h: number; lw: number };
 
@@ -65,6 +65,44 @@ export function templatePrims(t: Template, w: number, h: number, weight = 1): Pr
       for (let top = 68; top + 30 < h - 30; top += 66) for (let i = 0; i < 5; i++) hline(top + i * 6.5, 38, w - 38);
       break;
     }
+    case "Handwriting": {
+      // Practice lines: top, dashed midline, baseline (red), descender.
+      const x1 = 40, x2 = w - 40;
+      for (let top = 70; top + 54 < h - 30; top += 78) {
+        hline(top, x1, x2);
+        out.push({ t: "line", a: [x1, top + 18], b: [x2, top + 18], w: lw, dashed: true });
+        out.push({ t: "line", a: [x1, top + 36], b: [x2, top + 36], w: lw * 1.3, margin: true });
+        hline(top + 54, x1, x2);
+      }
+      break;
+    }
+    case "GuitarTab": {
+      for (let top = 70; top + 40 < h - 30; top += 84) {
+        for (let i = 0; i < 6; i++) hline(top + i * 8, 38, w - 38);
+        vline(38, top, top + 40, lw * 1.6);
+        vline(w - 38, top, top + 40, lw * 1.6);
+      }
+      break;
+    }
+    case "Isometric": {
+      const g = mm(6), dy = g * Math.sqrt(3) / 2;
+      let row = 0;
+      for (let y = dy; y < h; y += dy, row++)
+        for (let x = row % 2 ? g / 2 : g; x < w; x += g) out.push({ t: "dot", c: [x, y], r: 0.95 * weight });
+      break;
+    }
+    case "Weekly": {
+      const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Notes"];
+      const mx = 30, top = 60, gx = 14, gy = 14;
+      const cw = (w - mx * 2 - gx) / 2, ch = (h - top - 30 - gy * 3) / 4;
+      days.forEach((_, k) => {
+        const x = mx + (k % 2) * (cw + gx), y = top + Math.floor(k / 2) * (ch + gy);
+        out.push({ t: "rect", x, y, w: cw, h: ch, lw: lw * 1.4 });
+        hline(y + 22, x, x + cw, lw * 1.4);
+        for (let ly = y + 22 + mm(7); ly < y + ch - 4; ly += mm(7)) hline(ly, x + 6, x + cw - 6, lw * 0.8);
+      });
+      break;
+    }
     case "Storyboard": {
       const mx = 38, gx = 22, top = 54, cw = (w - mx * 2 - gx) / 2, ch = 158, gy = 90;
       for (let r = 0; r < 3; r++) for (let c = 0; c < 2; c++) {
@@ -79,6 +117,13 @@ export function templatePrims(t: Template, w: number, h: number, weight = 1): Pr
   return out;
 }
 
+export const WEEKLY_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Notes"];
+export function weeklyLabels(w: number, h: number): { x: number; y: number; text: string }[] {
+  const mx = 30, top = 60, gx = 14, gy = 14;
+  const cw = (w - mx * 2 - gx) / 2, ch = (h - top - 30 - gy * 3) / 4;
+  return WEEKLY_DAYS.map((text, k) => ({ x: mx + (k % 2) * (cw + gx) + 8, y: top + Math.floor(k / 2) * (ch + gy) + 15, text }));
+}
+
 export function drawPaper(ctx: CanvasRenderingContext2D, template: Template, paper: Paper, w: number, h: number, weight = 1) {
   ctx.fillStyle = css(paperBg(paper));
   ctx.fillRect(0, 0, w, h);
@@ -88,10 +133,12 @@ export function drawPaper(ctx: CanvasRenderingContext2D, template: Template, pap
     if (p.t === "line") {
       ctx.strokeStyle = p.margin ? margin : line;
       ctx.lineWidth = p.w;
+      if (p.dashed) ctx.setLineDash([4, 4]);
       ctx.beginPath();
       ctx.moveTo(p.a[0], p.a[1]);
       ctx.lineTo(p.b[0], p.b[1]);
       ctx.stroke();
+      if (p.dashed) ctx.setLineDash([]);
     } else if (p.t === "dot") {
       ctx.fillStyle = line;
       ctx.beginPath();
@@ -102,6 +149,12 @@ export function drawPaper(ctx: CanvasRenderingContext2D, template: Template, pap
       ctx.lineWidth = p.lw;
       ctx.strokeRect(p.x, p.y, p.w, p.h);
     }
+  }
+  if (template === "Weekly") {
+    ctx.fillStyle = line;
+    ctx.font = `600 11px ${FONT_FAMILY}`;
+    ctx.textBaseline = "middle";
+    for (const l of weeklyLabels(w, h)) ctx.fillText(l.text, l.x, l.y);
   }
 }
 
@@ -250,8 +303,11 @@ export function drawItem(ctx: CanvasRenderingContext2D, it: Item, o: DrawOptions
     drawTape(ctx, c.Tape);
   } else {
     const im = c.Image;
-    const src = o.image?.(im.asset);
-    if (src) ctx.drawImage(src, im.x, im.y, im.w, im.h);
+    const src = o.image?.(im.asset) as (CanvasImageSource & { width: number; height: number }) | undefined;
+    if (src && im.crop) {
+      const [cx, cy, cw, ch] = im.crop;
+      ctx.drawImage(src, cx * src.width, cy * src.height, cw * src.width, ch * src.height, im.x, im.y, im.w, im.h);
+    } else if (src) ctx.drawImage(src, im.x, im.y, im.w, im.h);
     else {
       ctx.fillStyle = "#c8ccd4";
       ctx.fillRect(im.x, im.y, im.w, im.h);

@@ -49,17 +49,23 @@ export function updateMeta(lib: Library, id: Id, f: (m: NotebookMeta) => Noteboo
 
 export function deleteForever(lib: Library, ids: Id[]): Library {
   const assets = new Set<Id>();
+  const audio = new Set<Id>();
   for (const id of ids) {
     const d = storage.loadDoc(id);
     if (d) assetIds(d).forEach((a) => assets.add(a));
+    d?.recordings?.forEach((r) => audio.add(r.id));
     storage.deleteDoc(id);
     storage.deleteThumb(id);
   }
   const next = { ...lib, notebooks: lib.notebooks.filter((m) => !ids.includes(m.id)) };
   // Pictures can be shared by duplicated notebooks: only delete unused ones.
-  if (assets.size) {
-    for (const m of next.notebooks) { const d = storage.loadDoc(m.id); if (d) assetIds(d).forEach((a) => assets.delete(a)); }
+  if (assets.size || audio.size) {
+    for (const m of next.notebooks) {
+      const d = storage.loadDoc(m.id);
+      if (d) { assetIds(d).forEach((a) => assets.delete(a)); d.recordings?.forEach((r) => audio.delete(r.id)); }
+    }
     assets.forEach(storage.deleteAsset);
+    audio.forEach((a) => storage.deleteRaw(`audio/${a}`));
   }
   storage.saveLibrary(next);
   return next;
@@ -103,16 +109,30 @@ export function today(): string {
 
 // ---------- backup ----------
 
+export const backupJson = () => JSON.stringify({ app: "notebook", version: 2, created: Date.now(), files: Object.fromEntries(storage.allFiles()) });
+
+/** Takes the daily automatic backup if the last one is more than a day old. */
+export async function autoBackup(): Promise<boolean> {
+  const snaps = await storage.listSnapshots();
+  if (snaps.length && Date.now() - snaps[0] < 86400000) return false;
+  if (!storage.loadLibrary().notebooks.length) return false;
+  await storage.saveSnapshot(backupJson());
+  return true;
+}
+
 export function downloadBackup() {
-  const files = Object.fromEntries(storage.allFiles());
-  const blob = new Blob([JSON.stringify({ app: "notebook", version: 2, created: Date.now(), files })], { type: "application/json" });
+  const blob = new Blob([backupJson()], { type: "application/json" });
   const d = new Date();
   download(`Notebook backup ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}.json`, blob, "application/json");
 }
 
 /** Restores a backup file. Existing notebooks are kept; ones in the backup are added or replaced. */
 export async function restoreBackup(file: File): Promise<number> {
-  const data = JSON.parse(await file.text());
+  return restoreBackupText(await file.text());
+}
+
+export async function restoreBackupText(text: string): Promise<number> {
+  const data = JSON.parse(text);
   if (!data || data.app !== "notebook" || typeof data.files !== "object") throw new Error("This is not a Notebook backup file");
   const current = storage.loadLibrary();
   const files = data.files as Record<string, string>;

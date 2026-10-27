@@ -12,6 +12,11 @@ import type { DocModel } from "./doc";
 import { Panels, type PanelKind } from "./Panels";
 import { SidePanel, Overview } from "./SidePanel";
 import { EditDialogs, type EditDialog } from "./Dialogs";
+import { CropDialog } from "./Crop";
+import { AudioLayer } from "./AudioLayer";
+import { ZoomWindow } from "./ZoomWindow";
+import { inkKey, needsOcr, recognizeItems } from "../core/ocr";
+import { Modal } from "../ui/ui";
 import * as store from "../store";
 
 interface TextEdit { page: number; id: Id | null; x: number; y: number; w: number; text: string; size: number; color: Rgba }
@@ -42,6 +47,11 @@ export function EditorView({ model, api, onClose }: { model: DocModel; api: AppA
   const [side, setSide] = useState(false);
   const [overview, setOverview] = useState(false);
   const [dialog, setDialog] = useState<EditDialog | null>(null);
+  const [cropItem, setCropItem] = useState<Item | null>(null);
+  const [audioAt, setAudioAt] = useState<Anchor | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [zoomWin, setZoomWin] = useState(false);
+  const [ocr, setOcr] = useState<{ text: string; busy: boolean } | null>(null);
   const [text, setText] = useState<TextEdit | null>(null);
   const [timer, setTimer] = useState<{ since: number | null; acc: number }>({ since: null, acc: 0 });
   const [, setNow] = useState(0);
@@ -127,6 +137,36 @@ export function EditorView({ model, api, onClose }: { model: DocModel; api: AppA
     const t = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(t);
   }, [timer.since]);
+
+  // Background handwriting recognition: one page at a time while the editor is idle.
+  useEffect(() => {
+    if (!prefs.ocr_index) return;
+    let running = false, stopped = false;
+    const t = setInterval(async () => {
+      if (running || stopped || !board || board.busy || textRef.current || document.hidden) return;
+      const page = model.pages.find(needsOcr);
+      if (!page) return;
+      running = true;
+      const key = inkKey(page);
+      try {
+        const text = await recognizeItems(page.items, 60);
+        if (!stopped) model.setOcr(page.id, key, text, inkKey);
+      } catch { /* offline or unsupported: try again later */ } finally { running = false; }
+    }, 5000);
+    return () => { stopped = true; clearInterval(t); };
+  }, [board, model, prefs.ocr_index]);
+
+  const convertToText = async () => {
+    setOcr({ text: "", busy: true });
+    try {
+      const text = await recognizeItems(model.selectedItems());
+      setOcr({ text: text || "", busy: false });
+      if (!text) api.toast("No handwriting recognised");
+    } catch (e) {
+      setOcr(null);
+      api.toast(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const openPanel = (kind: PanelKind, el: Element) => setPanel(panel?.kind === kind ? null : { kind, at: rectOf(el) });
 
@@ -234,6 +274,7 @@ export function EditorView({ model, api, onClose }: { model: DocModel; api: AppA
             </button>
           ))}
           <div className="sep" />
+          {visibleTool("Audio") && <button className={"icon-btn" + (recording ? " active" : "")} title="Audio recordings" style={recording ? { color: "#ff3b30" } : undefined} onClick={(e) => setAudioAt(audioAt ? null : rectOf(e.currentTarget))}><Icon name="mic" /></button>}
           {visibleTool("Stickers") && <button className={"icon-btn" + (panel?.kind === "stickers" ? " active" : "")} title="Stickers" onClick={(e) => openPanel("stickers", e.currentTarget)}><Icon name="sticker" /></button>}
           {visibleTool("Insert") && <button className={"icon-btn" + (panel?.kind === "insert" ? " active" : "")} title="Insert" onClick={(e) => openPanel("insert", e.currentTarget)}><Icon name="plusCircle" /></button>}
           <button className="icon-btn" title="Undo (⌘Z)" disabled={!model.canUndo()} onClick={() => model.undo()}><Icon name="undo" /></button>
@@ -250,18 +291,20 @@ export function EditorView({ model, api, onClose }: { model: DocModel; api: AppA
           </div>
 
           {/* Bottom-left: back chip after a link, page number (tap = go to page). */}
-          <div className="floating row" style={{ left: 14, bottom: "calc(14px + env(safe-area-inset-bottom))" }}>
+          <div className="floating row" style={{ left: 14, bottom: "calc(14px + env(safe-area-inset-bottom))", display: zoomWin ? "none" : undefined }}>
             {model.backStack.length > 0 && <button className="chip-btn" onClick={() => model.goBack()}>↶ Page {model.backStack[model.backStack.length - 1] + 1}</button>}
             <button className="chip-btn" onClick={() => setDialog({ k: "goto", text: String(model.current + 1) })}>{model.current + 1} of {model.pages.length}</button>
           </div>
 
-          <div className="floating zoom-ctl">
+          {zoomWin && board && <ZoomWindow model={model} board={board} prefs={prefs} tool={tool} onClose={() => setZoomWin(false)} />}
+          <div className="floating zoom-ctl" style={zoomWin ? { display: "none" } : undefined}>
             {board?.ruler && (
               <>
                 <button className="icon-btn small" onClick={() => board.rotateRuler(-15)}>−15°</button>
                 <button className="icon-btn small" onClick={() => board.rotateRuler(15)}>+15°</button>
               </>
             )}
+            <button className={"icon-btn" + (zoomWin ? " active" : "")} title="Zoom window: write big, ink lands small" onClick={() => setZoomWin(!zoomWin)}><Icon name="magnifier" /></button>
             <button className={"icon-btn" + (board?.ruler ? " active" : "")} title="Ruler" onClick={() => { board?.toggleRuler(); bump(); }}><Icon name="ruler" /></button>
             <button className="icon-btn" title="Zoom in" onClick={() => board?.setZoom(board.zoom * 1.25)}><Icon name="zoomIn" /></button>
             <button className="pct" title="Fit width" onClick={() => board?.fitWidth()}>{zoomPct}%</button>
@@ -277,8 +320,8 @@ export function EditorView({ model, api, onClose }: { model: DocModel; api: AppA
             </div>
           )}
 
-          {selRect && !text && !dialog && (
-            <SelectionMenu model={model} rect={selRect} api={api} onPanel={(kind, el) => setPanel({ kind, at: rectOf(el) })} onLink={() => {
+          {selRect && !text && !dialog && !ocr && !cropItem && (
+            <SelectionMenu model={model} rect={selRect} api={api} onCrop={setCropItem} onConvert={convertToText} onPanel={(kind, el) => setPanel({ kind, at: rectOf(el) })} onLink={() => {
               const l = model.selectedItems()[0]?.link;
               const page = l && "Page" in l ? String(model.pages.findIndex((p) => p.id === l.Page) + 1) : "";
               setDialog({ k: "link", url: l && "Url" in l ? l.Url : "", page, web: !l || "Url" in l });
@@ -322,14 +365,39 @@ export function EditorView({ model, api, onClose }: { model: DocModel; api: AppA
         />
       )}
       {overview && <Overview model={model} night={prefs.night_mode} onClose={() => setOverview(false)} />}
+      <AudioLayer model={model} toast={api.toast} panelAt={audioAt} onClosePanel={() => setAudioAt(null)} onState={setRecording} />
+      {ocr && (
+        <Modal onClose={() => setOcr(null)}>
+          <h2>Convert to text</h2>
+          {ocr.busy ? (
+            <p className="muted">Reading your handwriting… (the first time takes a little longer)</p>
+          ) : (
+            <>
+              <textarea value={ocr.text} onChange={(e) => setOcr({ ...ocr, text: e.target.value })} rows={6}
+                style={{ width: "100%", background: "var(--raised)", border: 0, borderRadius: 10, padding: 10, resize: "vertical", userSelect: "text" }} />
+              <p className="muted small">Check and correct the text, then replace your handwriting with it.</p>
+            </>
+          )}
+          <div className="actions">
+            <button className="btn" onClick={() => setOcr(null)}>Cancel</button>
+            <button className="btn" disabled={ocr.busy || !ocr.text} onClick={() => { navigator.clipboard?.writeText(ocr.text); api.toast("Copied"); }}>Copy</button>
+            <button className="btn primary" disabled={ocr.busy || !ocr.text.trim()} onClick={() => {
+              const b = model.selectionBox();
+              model.convertSelectionToText(ocr.text.trim(), Math.max(12, Math.min(28, (b?.h ?? 40) / Math.max(1, ocr.text.split("\n").length) * 0.55)), prefs.text_color);
+              setOcr(null);
+            }}>Replace</button>
+          </div>
+        </Modal>
+      )}
+      {cropItem && <CropDialog model={model} item={cropItem} onClose={() => setCropItem(null)} />}
       {dialog && <EditDialogs dialog={dialog} model={model} onClose={() => setDialog(null)} setDialog={setDialog} toast={api.toast} />}
     </div>
   );
 }
 
-function SelectionMenu({ model, rect, api, onPanel, onLink }: {
+function SelectionMenu({ model, rect, api, onPanel, onLink, onCrop, onConvert }: {
   model: DocModel; rect: { x: number; y: number; w: number; h: number }; api: AppApi;
-  onPanel: (k: PanelKind, el: Element) => void; onLink: () => void;
+  onPanel: (k: PanelKind, el: Element) => void; onLink: () => void; onCrop: (it: Item) => void; onConvert: () => void;
 }) {
   const [more, setMore] = useState<Anchor | null>(null);
   const top = Math.max(8, rect.y - 62);
@@ -353,6 +421,8 @@ function SelectionMenu({ model, rect, api, onPanel, onLink }: {
       {more && (
         <div className="scrim" onPointerDown={() => setMore(null)}>
           <div className="popover menu" style={{ left: Math.min(innerWidth - 250, more.x), top: more.y + more.h + 6, width: 240 }} onPointerDown={(e) => e.stopPropagation()}>
+            {items.some((i) => "Stroke" in i.content && i.content.Stroke.pen !== "Highlighter") && <button onClick={() => { setMore(null); onConvert(); }}><Icon name="scan" size={18} />Convert to text</button>}
+            {items.length === 1 && "Image" in items[0].content && <button onClick={() => { setMore(null); onCrop(items[0]); }}><Icon name="image" size={18} />Crop image…</button>}
             <button disabled={!hasShape} onClick={(e) => { setMore(null); onPanel("shapeStyle", e.currentTarget); }}><Icon name="shapes" size={18} />Shape style…</button>
             <button onClick={() => { setMore(null); onLink(); }}><Icon name="link" size={18} />Link…</button>
             {link && <button onClick={() => { setMore(null); model.followLink(link); }}><Icon name="chevronRight" size={18} />Follow link</button>}

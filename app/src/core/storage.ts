@@ -5,6 +5,7 @@ import type { Doc, Id, Library } from "./model";
 import { normalizeDoc } from "./model";
 
 const PREFIX = "notebook-v1:data/";
+const SNAP = "notebook-v1:snapshots/";
 const mem = new Map<string, string>();
 let db: IDBDatabase | null = null;
 let onError: (msg: string) => void = () => {};
@@ -30,7 +31,8 @@ export async function initStorage(): Promise<void> {
       req.onsuccess = () => {
         const c = req.result;
         if (c) {
-          mem.set(String(c.key), c.value as string);
+          // Backup snapshots are big and only read on demand.
+          if (!String(c.key).startsWith(SNAP)) mem.set(String(c.key), c.value as string);
           c.continue();
         } else resolve();
       };
@@ -80,6 +82,7 @@ function setRaw(name: string, value: string) {
   put(key, value);
 }
 
+export const deleteRaw = (name: string) => delRaw(name);
 function delRaw(name: string) {
   const key = PREFIX + name;
   mem.delete(key);
@@ -162,3 +165,27 @@ export function allFiles(): [string, string][] {
   return out;
 }
 export const restoreFile = (name: string, value: string) => setRaw(name, value);
+
+// ---------- automatic backups (kept in IndexedDB, outside the in-memory cache) ----------
+
+function idb<T>(mode: IDBTransactionMode, f: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    if (!db) return reject(new Error("Storage unavailable"));
+    const req = f(db.transaction("files", mode).objectStore("files"));
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function listSnapshots(): Promise<number[]> {
+  if (!db) return [];
+  const keys = await idb("readonly", (s) => s.getAllKeys());
+  return keys.map(String).filter((k) => k.startsWith(SNAP)).map((k) => Number(k.slice(SNAP.length))).sort((a, b) => b - a);
+}
+export async function saveSnapshot(json: string, keep = 7) {
+  if (!db) return;
+  await idb("readwrite", (s) => s.put(json, SNAP + Date.now()));
+  const all = await listSnapshots();
+  for (const ts of all.slice(keep)) await idb("readwrite", (s) => s.delete(SNAP + ts));
+}
+export const loadSnapshot = (ts: number) => idb<string>("readonly", (s) => s.get(SNAP + ts));

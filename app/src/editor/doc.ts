@@ -2,7 +2,7 @@
 // Pages and items are treated as immutable: a change makes new objects, so
 // the renderer can tell what changed by identity and undo is cheap.
 
-import type { Content, Doc, Id, Item, Layer, Link, Page, Paper, Sticker, Template } from "../core/model";
+import type { Content, Doc, Id, Item, Layer, Link, Page, Paper, Rgba, Sticker, Template } from "../core/model";
 import { editable, newId, newPage, visible } from "../core/model";
 import type { Pt } from "../core/geom";
 import { hitItem, translateItem, unionBBox } from "../core/geom";
@@ -28,6 +28,10 @@ export class DocModel {
   /** Scroll request for the view. */
   scrollTo: number | null = null;
   backStack: number[] = [];
+  /** While recording: stamps new ink with the recording time. */
+  audioClock: (() => { rec: Id; t: number }) | null = null;
+  /** While a recording plays: tapping ink written during it seeks there. Returns true if handled. */
+  onInkTap: ((it: Item) => boolean) | null = null;
 
   constructor(metaId: Id, title: string, doc: Doc) {
     this.metaId = metaId;
@@ -156,7 +160,8 @@ export class DocModel {
   // ---------- items ----------
 
   addItem(i: number, it: Item) {
-    const item = { ...it, layer: this.activeLayerId(i) };
+    let item = { ...it, layer: this.activeLayerId(i) };
+    if (this.audioClock && "Stroke" in item.content) item = { ...item, content: { Stroke: { ...item.content.Stroke, audio: this.audioClock() } } };
     this.updatePage(i, (p) => ({ ...p, items: [...p.items, item] }));
   }
   /** Adds items as one step and selects them. */
@@ -309,6 +314,33 @@ export class DocModel {
   }
   setBookmark(i: number, name: string | null) { this.updatePage(i, (p) => ({ ...p, bookmark: name })); }
 
+  /** Stores recognised handwriting if the page's ink hasn't changed meanwhile. */
+  setOcr(pageId: Id, key: string, text: string, currentKey: (p: Page) => string) {
+    const i = this.doc.pages.findIndex((p) => p.id === pageId);
+    if (i < 0 || currentKey(this.doc.pages[i]) !== key) return;
+    this.updatePage(i, (p) => ({ ...p, ocr: { key, text } }), false);
+  }
+
+  /** Replaces the selected handwriting with a text box. */
+  convertSelectionToText(text: string, size: number, color: Rgba) {
+    const s = this.selection;
+    const b = this.selectionBox();
+    if (!s || !b) return;
+    const ids = new Set(this.selectedItems().filter((it) => "Stroke" in it.content || "Shape" in it.content).map((it) => it.id));
+    const layer = this.activeLayerId(s.page);
+    const box: Item = { id: newId(), layer, link: null, content: { Text: { x: b.x, y: b.y, w: Math.max(120, b.w), text, size, color } } };
+    this.updatePage(s.page, (p) => ({ ...p, items: [...p.items.filter((it) => !ids.has(it.id)), box] }));
+    this.selection = { page: s.page, ids: [box.id] };
+  }
+
+  // ---------- recordings ----------
+
+  get recordings() { return this.doc.recordings ?? []; }
+  setRecordings(f: (r: NonNullable<Doc["recordings"]>) => NonNullable<Doc["recordings"]>) {
+    this.doc = { ...this.doc, recordings: f(this.recordings) };
+    this.touch();
+  }
+
   // ---------- outline ----------
 
   addOutline(i = this.current): Id {
@@ -369,7 +401,7 @@ export class DocModel {
     if (!q) return [];
     const out: { page: number; text: string }[] = [];
     this.doc.pages.forEach((p, i) => {
-      const texts = [p.bookmark ?? "", ...p.items.flatMap((it) => ("Text" in it.content ? [it.content.Text.text] : [])),
+      const texts = [p.bookmark ?? "", p.ocr?.text ?? "", ...p.items.flatMap((it) => ("Text" in it.content ? [it.content.Text.text] : [])),
         ...this.doc.outline.filter((o) => o.page === p.id).map((o) => o.title)];
       for (const t of texts) {
         const pos = t.toLowerCase().indexOf(q);

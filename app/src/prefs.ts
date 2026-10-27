@@ -14,7 +14,7 @@ export const PALETTE = [
   "#039be5", "#12b5cb", "#00897b", "#188038", "#7cb342", "#c0ca33", "#f6c026", "#ffd60a",
   "#f28b25", "#e8710a", "#d93025", "#c2185b", "#ff6f91", "#a1887f", "#795548", "#3e2723",
 ];
-export const TOOL_NAMES = ["Pen", "Highlighter", "Tape", "Eraser", "Lasso", "Hand", "Laser", "Shapes", "Text", "Stickers", "Insert"] as const;
+export const TOOL_NAMES = ["Pen", "Highlighter", "Tape", "Eraser", "Lasso", "Hand", "Laser", "Shapes", "Text", "Audio", "Stickers", "Insert"] as const;
 
 export interface Prefs {
   pen_kind: PenKind;
@@ -70,6 +70,8 @@ export interface Prefs {
   new_size: PaperSize;
   new_landscape: boolean;
   last_backup: number;
+  /** Recognise handwriting in the background so it can be searched. */
+  ocr_index: boolean;
 }
 
 const hexes = (h: string[]) => h.map(fromHex);
@@ -127,6 +129,7 @@ export const DEFAULT_PREFS: Prefs = {
   new_size: "A4",
   new_landscape: false,
   last_backup: 0,
+  ocr_index: true,
 };
 
 export function loadPrefs(): Prefs {

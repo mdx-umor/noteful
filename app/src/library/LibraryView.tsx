@@ -38,6 +38,7 @@ export function LibraryView({ api }: { api: AppApi }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [cardSize, setCardSize] = useState(150);
   const [busy, setBusy] = useState<string | null>(null);
+  const [remindLater, setRemindLater] = useState(0);
   const [, refresh] = useReducer((x: number) => x + 1, 0);
   // Thumbnails are rendered in the background; redraw when one is ready.
   useEffect(() => { addEventListener("nb-thumb", refresh); return () => removeEventListener("nb-thumb", refresh); }, []);
@@ -162,6 +163,14 @@ export function LibraryView({ api }: { api: AppApi }) {
           <button className={"icon-btn" + (selecting ? " active" : "")} title="Select" onClick={() => { setSelecting(!selecting); setSelected(new Set()); }}><Icon name="select" /></button>
           <button className="icon-btn" title="Quick note" onClick={api.quickNote}><Icon name="quick" /></button>
         </div>
+        {lib.notebooks.some((m) => Date.now() - m.created > 7 * 86400000) && Date.now() - (prefs.last_backup || 0) > 7 * 86400000 && Date.now() - remindLater > 86400000 && (
+          <div className="row" style={{ margin: "0 22px 8px", background: "var(--panel)", borderRadius: 12, padding: "8px 12px", border: "1px solid var(--line)" }}>
+            <Icon name="download" size={18} />
+            <span className="grow small">Keep a copy of your notebooks: download a backup (notebooks live in this browser only).</span>
+            <button className="btn" onClick={() => setRemindLater(Date.now())}>Later</button>
+            <button className="btn primary" onClick={() => { store.downloadBackup(); setPrefs((p) => (p.last_backup = Date.now())); }}>Download backup</button>
+          </div>
+        )}
         {search !== null && search && <div className="muted small" style={{ padding: "0 22px" }}>{list.length} match{list.length === 1 ? "" : "es"} found</div>}
         {filter.k === "trash" && list.length > 0 && (
           <div className="row" style={{ padding: "0 22px" }}>
@@ -443,10 +452,35 @@ export function LibraryView({ api }: { api: AppApi }) {
               <button className="btn primary" onClick={() => { store.downloadBackup(); setPrefs((p) => (p.last_backup = Date.now())); }}><span className="row"><Icon name="download" size={18} />Download backup</span></button>
               <button className="btn" onClick={restore}><span className="row"><Icon name="upload" size={18} />Restore…</span></button>
             </div>
+            <div className="section">Automatic backups on this device</div>
+            <AutoBackups onRestored={(n) => { setLib(storage.loadLibrary()); toast(`Restored ${n} notebook${n === 1 ? "" : "s"}`); close(); }} />
           </Modal>
         );
     }
   }
+}
+
+function AutoBackups({ onRestored }: { onRestored: (n: number) => void }) {
+  const [list, setList] = useState<number[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { storage.listSnapshots().then(setList).catch(() => setList([])); }, []);
+  if (list === null) return <p className="muted small">Loading…</p>;
+  if (!list.length) return <p className="muted small">The first automatic backup is made shortly after you start writing. One is kept per day for 7 days.</p>;
+  return (
+    <div className="menu">
+      {list.map((ts) => (
+        <div key={ts} className="row" style={{ padding: "4px 0" }}>
+          <span className="grow small">{new Date(ts).toLocaleString()}</span>
+          <button className="btn" disabled={busy} onClick={async () => {
+            if (!confirm("Restore this backup? Notebooks in it replace the same notebooks here; others are kept.")) return;
+            setBusy(true);
+            try { onRestored(await store.restoreBackupText(await storage.loadSnapshot(ts))); } finally { setBusy(false); }
+          }}>Restore</button>
+        </div>
+      ))}
+      <p className="muted small">These are kept in this browser. If the browser's data is cleared they are gone too, so also download a backup now and then.</p>
+    </div>
+  );
 }
 
 export type { Rgba };

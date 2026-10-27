@@ -354,6 +354,7 @@ function PanelBody({ kind, model, board, api, tool, onClose, setPanel, setTool, 
             <Toggle label="Night mode" value={prefs.night_mode} onChange={(v) => set((p) => (p.night_mode = v))} />
             <Toggle label="Study timer" value={prefs.show_timer} onChange={(v) => set((p) => (p.show_timer = v))} />
             <Toggle label="Keep screen awake" value={prefs.keep_awake} onChange={(v) => set((p) => (p.keep_awake = v))} />
+            <Toggle label="Search handwriting" value={prefs.ocr_index} onChange={(v) => set((p) => (p.ocr_index = v))} />
             <Toggle label="Dark interface" value={prefs.dark_ui} onChange={(v) => set((p) => (p.dark_ui = v))} />
           </div>
           <hr />

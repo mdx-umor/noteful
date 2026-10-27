@@ -66,7 +66,7 @@ export function EditDialogs({ dialog: d, model, onClose, setDialog, toast }: {
       return (
         <Modal onClose={onClose}>
           <div className="row"><h2 className="grow" style={{ margin: 0 }}>Find in notebook</h2><button className="btn" onClick={onClose}>Done</button></div>
-          <input type="search" autoFocus placeholder="Typed text, bookmarks, outline" value={d.q} onChange={(e) => setDialog({ ...d, q: e.target.value })} style={{ marginTop: 12 }} />
+          <input type="search" autoFocus placeholder="Handwriting, typed text, bookmarks, outline" value={d.q} onChange={(e) => setDialog({ ...d, q: e.target.value })} style={{ marginTop: 12 }} />
           {d.q.trim() && <p className="muted small">{hits.length} match{hits.length === 1 ? "" : "es"} found</p>}
           <div className="menu" style={{ maxHeight: 320, overflowY: "auto" }}>
             {hits.map((h, k) => (

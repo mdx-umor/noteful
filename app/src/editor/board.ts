@@ -77,6 +77,8 @@ export class Board {
   private unsubs: (() => void)[] = [];
   private eraserPos: Pt | null = null;
   private hidden = new Set<number>();
+  /** Zoom-window target box (page units), drawn as a blue frame. */
+  zoomTarget: { page: number; x: number; y: number; w: number; h: number } | null = null;
 
   constructor(
     private wrap: HTMLDivElement,
@@ -463,6 +465,15 @@ export class Board {
       ctx.beginPath();
       ctx.arc(this.eraserPos[0] - w.left, this.eraserPos[1] - w.top, p.eraser_size, 0, Math.PI * 2);
       ctx.stroke();
+    }
+    const zt = this.zoomTarget;
+    if (zt && pages[zt.page]) {
+      this.overlayPage(zt.page);
+      ctx.strokeStyle = "#0a84ff";
+      ctx.lineWidth = 2 / this.zoom;
+      ctx.strokeRect(zt.x, zt.y, zt.w, zt.h);
+      ctx.fillStyle = "rgba(10,132,255,0.06)";
+      ctx.fillRect(zt.x, zt.y, zt.w, zt.h);
     }
     this.renderRuler();
     this.renderLaser();
@@ -1016,6 +1027,10 @@ export class Board {
   private tapItem(page: number, pt: Pt, links: boolean): boolean {
     const m = this.model;
     const r = 6 / this.zoom;
+    if (m.onInkTap) {
+      const ink = m.itemAt(page, pt, r + 2 / this.zoom, (it) => "Stroke" in it.content && !!it.content.Stroke.audio);
+      if (ink && m.onInkTap(ink)) return true;
+    }
     const tape = m.itemAt(page, pt, r, (it) => "Tape" in it.content);
     if (tape) { m.toggleTape(page, tape.id); return true; }
     if (links) {
@@ -1092,6 +1107,12 @@ export class Board {
         for (const part of splitStroke(it.content.Stroke, pt, r)) out.push({ ...newItem({ Stroke: part }), layer: it.layer });
     }
     m.replaceItems(page, out, false);
+  }
+
+  setZoomTarget(t: Board["zoomTarget"]) {
+    this.zoomTarget = t;
+    this.overlayDirty = true;
+    this.kick();
   }
 
   setTool(t: Tool) {
