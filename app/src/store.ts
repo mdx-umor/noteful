@@ -30,6 +30,7 @@ export async function saveThumbnail(doc: Doc) {
   ctx.scale(s, s);
   drawPage(ctx, page, { paper: page.paper, image: picture });
   storage.saveThumb(doc.id, c.toDataURL("image/png").split(",")[1]);
+  dispatchEvent(new Event("nb-thumb"));
 }
 
 export function createNotebook(lib: Library, doc: Doc, title: string, cover: Rgba, folder: Id | null, tags: string[]): Library {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import type { Filter, Id, NotebookMeta, Paper, Rgba, Template, TagNode } from "../core/model";
 import { css, fromHex, matches, newDoc, normalizeTag, PAPERS, PAPER_SIZES, paperBg, query, SIZE_NAMES, sizeDims, tagMatches, tagTree } from "../core/model";
 import * as storage from "../core/storage";
@@ -38,6 +38,9 @@ export function LibraryView({ api }: { api: AppApi }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [cardSize, setCardSize] = useState(150);
   const [busy, setBusy] = useState<string | null>(null);
+  const [, refresh] = useReducer((x: number) => x + 1, 0);
+  // Thumbnails are rendered in the background; redraw when one is ready.
+  useEffect(() => { addEventListener("nb-thumb", refresh); return () => removeEventListener("nb-thumb", refresh); }, []);
 
   const list = useMemo(() => query(lib, filter, search ?? "", prefs.sort), [lib, filter, search, prefs.sort]);
   const tags = useMemo(() => tagTree(lib), [lib]);
