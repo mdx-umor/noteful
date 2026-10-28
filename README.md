@@ -35,6 +35,11 @@ and backup / restore (Settings in the library).
 Notebooks are saved automatically in the browser (IndexedDB). The storage format
 is the same as the earlier Rust version, so existing notebooks open unchanged.
 
+## Design guide (`docs/guide/`)
+
+`BUILD-SPEC-for-Claude.md`, `Noteful-Guide-Book.html` and the reference screenshots
+the app was built from.
+
 ## Earlier version (`notebook-v1/`)
 
 The first version was written in Rust (egui, compiled to WebAssembly). It is kept

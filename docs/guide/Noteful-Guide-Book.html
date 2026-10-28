@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Noteful Guide Book</title>
+<style>
+:root{--bg:#ffffff;--fg:#1d1d22;--muted:#5d5d6b;--card:#f4f4f8;--line:#dedee6;--accent:#6b4ce6;--keep:#1f8a4c;--skip:#b23a3a;}
+@media (prefers-color-scheme: dark){:root{--bg:#141418;--fg:#ececf1;--muted:#a3a3b3;--card:#1f1f26;--line:#30303a;--accent:#a28cff;--keep:#4cc483;--skip:#ff7b7b;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:32px 16px 80px}
+h1{font-size:2.2rem;margin:.2em 0}
+h2{font-size:1.55rem;margin:2.4em 0 .6em;padding-top:.6em;border-top:1px solid var(--line)}
+h3{font-size:1.15rem;margin:1.6em 0 .4em}
+p,li{color:var(--fg)}
+.muted{color:var(--muted)}
+code,kbd{background:var(--card);border:1px solid var(--line);border-radius:5px;padding:0 5px;font-size:.9em}
+nav.toc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 22px;margin:20px 0}
+nav.toc ol{margin:0;padding-left:20px;columns:2;column-gap:30px}
+@media (max-width:640px){nav.toc ol{columns:1}}
+a{color:var(--accent)}
+figure{margin:16px 0 24px}
+figure img{max-width:100%;border-radius:10px;border:1px solid var(--line);display:block}
+figure.small img{max-width:340px}
+figure.med img{max-width:560px}
+figcaption{font-size:.85rem;color:var(--muted);margin-top:6px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.grid figure{margin:0}
+table{border-collapse:collapse;width:100%;margin:12px 0 20px;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:var(--card)}
+.keep{color:var(--keep);font-weight:600}
+.skip{color:var(--skip);font-weight:600}
+.tip{background:var(--card);border-left:4px solid var(--accent);padding:10px 14px;border-radius:6px;margin:14px 0}
+.tablewrap{overflow-x:auto}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Noteful — Feature Guide Book</h1>
+<p class="muted">A screen-by-screen breakdown of the Noteful iPad note-taking app (free tier), written so you can rebuild it for iPad and improve on it. Screenshots come from the iPad app running on a Mac, so they show the real iPad screens. Captured 27 Oct 2026. All screenshots are in <code>screenshots/</code> next to this file.</p>
+<div class="tip"><b>Building it with Claude?</b> Hand Claude the file <code>BUILD-SPEC-for-Claude.md</code> (same folder) plus the <code>screenshots/</code> folder. It has the iPad-specific details: Apple Pencil handling, touch gestures, layouts, tech stack, data model, build order and a test checklist.</div>
+<div class="tip"><b>iPad controls:</b> wherever this guide says "click", read "tap". "Right-click" = long-press. Tap a tool once to pick it, tap it again to open its options. Fingers scroll and zoom; the Apple Pencil draws.</div>
+
+<nav class="toc"><strong>Contents</strong>
+<ol>
+<li><a href="#concept">What the app is</a></li>
+<li><a href="#library">Library (home screen)</a></li>
+<li><a href="#create">Creating a notebook</a></li>
+<li><a href="#editor">The editor layout</a></li>
+<li><a href="#pen">Pen tool</a></li>
+<li><a href="#highlighter">Highlighter &amp; Tape</a></li>
+<li><a href="#eraser">Eraser</a></li>
+<li><a href="#lasso">Lasso (select)</a></li>
+<li><a href="#othertools">Hand, Presentation, Audio, Stickers</a></li>
+<li><a href="#insert">Insert menu: text, shapes, images, links</a></li>
+<li><a href="#pages">Page management</a></li>
+<li><a href="#sidebar">Notebook sidebar: pages, bookmarks, outlines, layers</a></li>
+<li><a href="#view">View, ruler, zoom window</a></li>
+<li><a href="#more">More menu &amp; per-notebook settings</a></li>
+<li><a href="#settings">App settings</a></li>
+<li><a href="#shortcuts">Menus &amp; keyboard shortcuts</a></li>
+<li><a href="#premium">Premium features: keep vs skip</a></li>
+<li><a href="#better">How to make yours better</a></li>
+<li><a href="#build">Data model &amp; build order</a></li>
+</ol></nav>
+
+<!-- ============================================================ -->
+<h2 id="concept">1. What the app is</h2>
+<p>Noteful is a handwriting-first notebook app (like GoodNotes / Notability). The core idea:</p>
+<ul>
+<li><b>Library</b> of <b>notebooks</b>, organised with <b>folders</b> and nested <b>tags</b> (e.g. <code>Sample/Drawing</code>).</li>
+<li>Each notebook has an optional <b>cover</b> and a list of <b>pages</b>. Each page has a <b>paper template</b> (blank, ruled, grid, dot, Cornell…) or is a page from an imported <b>PDF</b>.</li>
+<li>On a page you draw with <b>pen / highlighter / tape</b>, and place <b>objects</b>: text boxes, shapes, images, stickers, links. Content lives in <b>layers</b>.</li>
+<li>Several notebooks can be open at once as <b>tabs</b>.</li>
+<li>Study features: <b>tape</b> to hide answers and reveal them, quiz "?" stickers, bookmarks, outlines, audio recording.</li>
+</ul>
+<figure><img src="screenshots/52-pdf-markup-tabs-layers.jpg" alt="Annotated PDF in the editor with tabs and layers"><figcaption>A real annotated PDF: handwriting, highlights, tape, a page tag (<code>#Sample/Markup</code>), two notebooks open as tabs, and the Layers panel.</figcaption></figure>
+
+<!-- ============================================================ -->
+<h2 id="library">2. Library (home screen)</h2>
+<figure><img src="screenshots/01-library-home.jpg" alt="Library home"><figcaption>Library in grid view, filtered by the tag <code>Sample/Drawing</code>.</figcaption></figure>
+
+<h3>Left sidebar</h3>
+<table>
+<tr><th>Item</th><th>What it does</th></tr>
+<tr><td><b>N logo ▾</b></td><td>Opens the About / Settings sheet (see <a href="#settings">App settings</a>).</td></tr>
+<tr><td><b>Notebooks</b> (collapsible)</td><td>All notebooks. Children are smart filters:</td></tr>
+<tr><td>· Untagged</td><td>Notebooks with no tag (with count).</td></tr>
+<tr><td>· Unfiled</td><td>Notebooks not inside any folder.</td></tr>
+<tr><td>· Trashed</td><td>Deleted notebooks (soft delete, restorable).</td></tr>
+<tr><td><b>Pinned</b></td><td>Notebooks (or pages) you pinned for quick access.</td></tr>
+<tr><td><b>Folders</b></td><td>Folder tree. Empty state shows an illustration + "No notebooks".</td></tr>
+<tr><td><b>Tags</b> (e.g. <code># Sample</code> → <code>Drawing</code>, <code>Markup</code>)</td><td>Hierarchical tags with counts. Clicking a parent shows everything under it. Tags can be put on notebooks <em>and</em> on individual pages.</td></tr>
+</table>
+
+<h3>Top-right toolbar</h3>
+<table>
+<tr><th>Icon</th><th>What it does</th></tr>
+<tr><td>🔍 Search</td><td>"Find in library" field. Results grouped (e.g. <b>Document Names</b>), match highlighted, "1 Match Found".</td></tr>
+<tr><td>☰ List / grid</td><td>Toggles between thumbnail grid and list (thumbnail, name, tag chips, "13 minutes ago", ••• button).</td></tr>
+<tr><td>⇅ Sort</td><td>Sort by Name / Date Modified / Date Created, plus Zoom In / Zoom Out (thumbnail size).</td></tr>
+<tr><td>☑ Select</td><td>Multi-select mode with a bottom action bar: Share, Duplicate, Move, Edit Tags, Delete.</td></tr>
+<tr><td>✎ Quick note</td><td>Instantly creates a new notebook named "Notes on 27/10/26" (today's date) and opens it.</td></tr>
+<tr><td><b>+</b> (bottom right)</td><td>Menu: <b>Notebook</b> (full create dialog), <b>Quick Create</b> (one tap, with a ⚙ to set defaults), <b>Import File</b> (PDF/images).</td></tr>
+</table>
+<div class="grid">
+<figure><img src="screenshots/02-library-sort-menu.jpg" alt=""><figcaption>Sort menu</figcaption></figure>
+<figure><img src="screenshots/03-library-list-view.jpg" alt=""><figcaption>List view</figcaption></figure>
+<figure><img src="screenshots/14-library-search.jpg" alt=""><figcaption>Library search</figcaption></figure>
+<figure><img src="screenshots/15-library-select-mode.jpg" alt=""><figcaption>Select mode + bulk action bar</figcaption></figure>
+<figure><img src="screenshots/05-new-item-menu.jpg" alt=""><figcaption>+ menu</figcaption></figure>
+<figure><img src="screenshots/13-folders-empty.jpg" alt=""><figcaption>Folders empty state</figcaption></figure>
+</div>
+
+<h3>Notebook ••• menu</h3>
+<figure class="med"><img src="screenshots/04-notebook-context-menu.jpg" alt=""><figcaption>Rename · Add Cover · Duplicate Notebook · Tags · Pin · Move · Share · Open in New Window · Delete Notebook</figcaption></figure>
+
+<!-- ============================================================ -->
+<h2 id="create">3. Creating a notebook</h2>
+<figure class="med"><img src="screenshots/06-new-notebook-dialog.jpg" alt=""><figcaption>New Notebook dialog</figcaption></figure>
+<ul>
+<li><b>Cover / Paper</b> preview tiles at top — click one to switch which picker is shown below.</li>
+<li><b>Name</b> field, <b>Notebook Cover</b> on/off toggle, <b>Tags</b> (pre-filled with the tag you're currently viewing).</li>
+<li><b>Paper</b> row: Blank, Ruled, Margin, Grid… and a <b>•••</b> button opening the full template library.</li>
+<li><b>Background colour</b>: ~12 swatches (white, cream, dark grey, black, pastels).</li>
+<li><b>Paper size</b> dropdown (A4, Letter…) and <b>portrait / landscape</b> toggle.</li>
+<li><b>Create</b> button top-right, ✕ to cancel.</li>
+</ul>
+
+<h3>Template library ("Choose a Template")</h3>
+<p>Tabs: <b>Explore</b> (built-in) and <b>Saved</b> (your own). Filters at the top: Colour, Size, Orientation, <b>Line Spacing</b> (e.g. 16 Medium), <b>Line Thickness</b>.</p>
+<table>
+<tr><th>Covers</th><td>Classic (17 colours), Simple (7), Botanical (4), Composition (5), Pattern (7+). Most beyond the first few are Pro.</td></tr>
+<tr><th>Paper</th><td><b>Basics</b>: Blank, Ruled, Margin, Grid, Dot*, Cornell*, 2 Columns* · <b>Cornell</b>*: Cornell, Blank, Grid, Dot · <b>Storyboards</b>*: 5 layouts · <b>Music</b>*: Staff, Grand Staff, Guitar/Bass TAB · <b>Handwriting</b>*: Mono / Colour practice lines · <b>Ruled</b>: Ruled, Margin, Margin Right, Grid, Dot*, 2/3 Columns*</td></tr>
+</table>
+<p class="muted">* = Pro.</p>
+<div class="grid">
+<figure><img src="screenshots/07-template-picker-covers.jpg" alt=""><figcaption>Cover templates</figcaption></figure>
+<figure><img src="screenshots/08-template-picker-cover-styles.jpg" alt=""><figcaption>Botanical / Composition / Pattern covers</figcaption></figure>
+<figure><img src="screenshots/09-paper-templates-basics.jpg" alt=""><figcaption>Paper: Basics &amp; Cornell + filters</figcaption></figure>
+<figure><img src="screenshots/10-paper-templates-storyboard-music.jpg" alt=""><figcaption>Storyboards &amp; Music</figcaption></figure>
+<figure><img src="screenshots/11-paper-templates-handwriting-ruled.jpg" alt=""><figcaption>Handwriting &amp; Ruled</figcaption></figure>
+<figure><img src="screenshots/12-saved-templates-import.jpg" alt=""><figcaption>Saved templates — + → Import File to add your own (PDF/image as template)</figcaption></figure>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="editor">4. The editor layout</h2>
+<figure><img src="screenshots/16-editor-overview.jpg" alt=""><figcaption>Blank editor (ruled paper)</figcaption></figure>
+<table>
+<tr><th>Area</th><th>Contents</th></tr>
+<tr><td><b>Top bar</b></td><td>‹ Back to library · <b>tab strip</b> (each open notebook is a tab with ✕, title ▾ dropdown) · sidebar toggle · <b>View</b> panel · <b>•••</b> More menu.</td></tr>
+<tr><td><b>Left toolbar</b> (vertical, can be moved)</td><td>Page grid · Pen · Highlighter/Tape · Eraser · Lasso · Hand · Presentation (laser) · Audio · Stickers · Insert (+) · Undo · Redo · then <b>colour favourites</b> for the current tool (3 on free).</td></tr>
+<tr><td><b>Bottom right</b></td><td>Ruler button and Zoom-window button.</td></tr>
+<tr><td><b>Bottom left status</b></td><td>Zoom % ("88%") and page indicator ("2 of 10"). After following a link, a "↶ Page 5" chip lets you jump back.</td></tr>
+<tr><td><b>Page area</b></td><td>Pages scroll vertically (default). Pull past the last page to add a new one.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="pen">5. Pen tool</h2>
+<p>Click the pen once to select it, click again to open its panel.</p>
+<div class="grid">
+<figure><img src="screenshots/17-pen-tool-panel.jpg" alt=""><figcaption>Pen type &amp; size</figcaption></figure>
+<figure><img src="screenshots/18-pen-settings.jpg" alt=""><figcaption>⚙ Fine-tuning</figcaption></figure>
+<figure><img src="screenshots/19-pen-gestures-options.jpg" alt=""><figcaption>Second tab: gestures &amp; pressure</figcaption></figure>
+</div>
+<ul>
+<li><b>Stroke preview</b> at the top.</li>
+<li><b>3 pen types</b>: ballpoint (even width), fountain (pressure-sensitive), brush/felt.</li>
+<li><b>Size</b> presets 0.35 / 0.8 / 1.2 / 1.9 / 3.8 mm + continuous slider.</li>
+<li><b>⚙ Settings</b>: Writing Pressure (1–10), Min Width (%), Width Smoothing (%), Motion Smoothing (stabiliser), Reset.</li>
+<li><b>Draw and hold</b>: <b>Auto Shape</b> (hold at end of stroke → becomes a clean line/rectangle/circle), <b>Scribble to Erase</b> (scribble then hold → erases what's under it), hold <b>Delay</b> slider (0.5 s).</li>
+<li><b>Pen pressure</b>: Enhanced Sensitivity, Draw on Hover (strokes drawn even without pen pressure). Apple Pencil hover shows a nib preview on supported iPads.</li>
+<li>Colour: favourites in the toolbar; tap the colour dot for a full picker. Shortcut: <kbd>F</kbd>; pen favourites <kbd>1</kbd>–<kbd>9</kbd>.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="highlighter">6. Highlighter &amp; Tape</h2>
+<div class="grid">
+<figure><img src="screenshots/20-highlighter-panel.jpg" alt=""><figcaption>Highlighter</figcaption></figure>
+<figure><img src="screenshots/21-tape-memorize-panel.jpg" alt=""><figcaption>Tape (study tool)</figcaption></figure>
+</div>
+<ul>
+<li><b>Highlighter</b>: sizes 1.9–6.2 mm + slider, <b>Draw Straight Lines</b> toggle, translucent and drawn <em>under</em> ink. Its own 3 colour favourites (yellow/green/purple). Shortcut <kbd>G</kbd>.</li>
+<li><b>Tape</b> (same button, second tab): opaque strips you draw over notes to hide them. Tap a tape to reveal / hide it.
+<ul><li>Tape type: straight line, rectangle, freehand.</li>
+<li>Size: 5 presets. Pattern: 4 striped pastel patterns.</li>
+<li><b>Cover All</b> / <b>Reveal All</b> buttons — quiz yourself on a whole page.</li></ul></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="eraser">7. Eraser</h2>
+<figure class="small"><img src="screenshots/22-eraser-panel.jpg" alt=""></figure>
+<ul>
+<li>5 sizes, Reset.</li>
+<li>Options: <b>Erase Whole Line</b> (stroke eraser) <span class="muted">Pro</span>, <b>Erase Highlight Only</b> <span class="muted">Pro</span>, <b>Auto-select Previous Tool</b> <span class="muted">Pro</span>, Erase Shapes, Erase Tapes.</li>
+<li>Shortcut <kbd>E</kbd>. Scribble-to-erase also works from the pen.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="lasso">8. Lasso (select)</h2>
+<div class="grid">
+<figure><img src="screenshots/23-lasso-panel.jpg" alt=""><figcaption>Lasso options</figcaption></figure>
+<figure><img src="screenshots/24-lasso-selection.jpg" alt=""><figcaption>Selection outline</figcaption></figure>
+<figure><img src="screenshots/25-lasso-context-menu.jpg" alt=""><figcaption>Selection menu (tap or long-press the selection)</figcaption></figure>
+<figure><img src="screenshots/26-lasso-stroke-style.jpg" alt=""><figcaption>Style: recolour / restyle selected ink</figcaption></figure>
+</div>
+<ul>
+<li>Shape: <b>freeform</b> or <b>rectangle</b>.</li>
+<li>Object filters <span class="muted">(Pro)</span>: choose what the lasso picks up — Handwriting, Highlights, Text Boxes, Images, Shapes, Tapes.</li>
+<li>Selection menu: Cut · Copy · Duplicate · Delete · <b>Resize</b> · <b>Style</b> (colour, solid/dashed/dotted, pen size) · <b>Take Screenshot</b> · <b>Convert to Text</b> (handwriting OCR) · <b>Save</b> (save as reusable sticker) · <b>Group</b> · <b>Arrange</b> (Bring to Front / Send to Back) · <b>Move to Layer…</b></li>
+<li>Drag the selection to move it. Shortcut <kbd>A</kbd>.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="othertools">9. Hand, Presentation, Audio, Stickers</h2>
+<div class="grid">
+<figure><img src="screenshots/27-presentation-laser-tool.jpg" alt=""><figcaption>Presentation tool</figcaption></figure>
+<figure><img src="screenshots/28-stickers-panel.jpg" alt=""><figcaption>Stickers</figcaption></figure>
+</div>
+<ul>
+<li><b>Hand</b> (<kbd>H</kbd>): pan/scroll without drawing; tap links and tapes.</li>
+<li><b>Presentation / laser pointer</b>: pointer colours (red, blue, green, purple), <b>Draw Lines</b> (fading laser ink), Display options for external screens: <b>Screen Mirroring</b> or <b>Hide Toolbar UI</b> (audience sees only the page).</li>
+<li><b>Audio recordings</b> (mic): record a lecture while writing; recordings attach to the notebook. <span class="muted">(Needs microphone permission — didn't open in this session.)</span></li>
+<li><b>Stickers</b>: "Recent Stickers" panel. Make a sticker by lasso-selecting anything → <b>Save</b>. <b>Install Samples</b> adds a starter pack. The sample notebook uses "?" quiz stickers over diagram labels.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="insert">10. Insert menu: text, shapes, images, links</h2>
+<figure class="small"><img src="screenshots/29-insert-menu.jpg" alt=""><figcaption>Insert (+): Tags · Page · Image · Textbox · Shape · Sticker · Import File · Take Photo. The 🔧 opens toolbar customisation.</figcaption></figure>
+
+<h3>Text boxes</h3>
+<figure><img src="screenshots/35-textbox-format-bar.jpg" alt=""><figcaption>Text tool (<kbd>T</kbd>) — click on the page to place a box; a formatting bar appears at the bottom.</figcaption></figure>
+<p>Formatting bar: font (Helvetica) · size (16) · <b>B</b> <i>I</i> <u>U</u> <s>S</s> · Aa (text styles) · text colour · box fill colour · align left/centre/right · line spacing · vertical align top/middle/bottom · bullet list · numbered list · outdent/indent. Box has resize handles and a ⊕ move handle.</p>
+
+<h3>Shapes</h3>
+<div class="grid">
+<figure><img src="screenshots/30-insert-shape.jpg" alt=""><figcaption>Shape picker</figcaption></figure>
+<figure><img src="screenshots/32-shape-context-menu.jpg" alt=""><figcaption>Shape menu</figcaption></figure>
+<figure><img src="screenshots/31-shape-style.jpg" alt=""><figcaption>Shape Style</figcaption></figure>
+<figure><img src="screenshots/33-link-settings.jpg" alt=""><figcaption>Link Settings (Web page / Notebook)</figcaption></figure>
+</div>
+<ul>
+<li>Free: square, rounded rect, pill, circle, diamond, straight arrow, curved arrow. Pro: triangle, hexagon, cloud, burst, star.</li>
+<li>Shape menu: Cut, Copy, Duplicate, Delete, Resize, Style, <b>Link</b>, Save (as sticker), Arrange, Move to Layer.</li>
+<li>Shape Style: colour, fill style (filled / tinted / outline / dashed / dotted), border size (none + 3), corner radius, opacity.</li>
+<li><b>Link</b>: any object can be a hyperlink — to a <b>web page</b> (URL) or to a <b>page in a notebook</b>. Used in the sample for "Go to:" buttons and a clickable outline. After jumping, a "↶ Page N" chip returns you.</li>
+</ul>
+
+<h3>Images, photos, files</h3>
+<ul>
+<li><b>Image</b>: insert from photos/files; move, resize, crop <span class="muted">(crop is Pro)</span>.</li>
+<li><b>Take Photo</b>: camera capture straight onto the page.</li>
+<li><b>Import File</b>: PDFs become pages you can write on.</li>
+<li><b>Tags</b>: tag the current page (shows as a chip like <code>#Sample/Markup</code> in the corner).</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="pages">11. Page management</h2>
+<figure><img src="screenshots/40-page-manager.jpg" alt=""><figcaption>Page grid (first toolbar icon): undo/redo, Select, and actions Insert · Cut · Copy · Paste · Rotate · Tag · Delete · Extract · Share.</figcaption></figure>
+<div class="grid">
+<figure><img src="screenshots/41-insert-page.jpg" alt=""><figcaption>Insert Page</figcaption></figure>
+<figure><img src="screenshots/57-page-thumbnail-menu.jpg" alt=""><figcaption>Page thumbnail ▾ menu</figcaption></figure>
+</div>
+<ul>
+<li><b>Insert Page</b>: position (After current page / before / end), Cover or Paper template (Current, Blank, Ruled, … more), or <b>Import File</b>, <b>Merge Notebook…</b>, <b>Choose Photo</b>.</li>
+<li><b>Thumbnail menu</b>: Insert Page, Cut, Copy, Paste, Rotate, Duplicate, Clear Page, Delete.</li>
+<li><b>Extract</b>: export selected pages into a new notebook / file.</li>
+<li>Pull-to-add: drag past the last page to append a page.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="sidebar">12. Notebook sidebar: pages, bookmarks, outlines, layers</h2>
+<p>Toggle with the sidebar icon in the top bar. Four tabs; <b>+</b> adds an item in the current tab; <b>•••</b> → Show Recently Deleted, Show in Overlay / Sidebar.</p>
+<div class="grid">
+<figure><img src="screenshots/55-overview-thumbnails-tags.jpg" alt=""><figcaption>Overview: thumbnails with page tags and bookmark ribbons</figcaption></figure>
+<figure><img src="screenshots/54-bookmarks.jpg" alt=""><figcaption>Bookmarks (named, with page number)</figcaption></figure>
+<figure><img src="screenshots/53-outlines.jpg" alt=""><figcaption>Outlines (table of contents, nestable)</figcaption></figure>
+<figure><img src="screenshots/43-sidebar-layers.jpg" alt=""><figcaption>Layers</figcaption></figure>
+</div>
+<ul>
+<li><b>Layers</b>: each has a thumbnail, name, lock 🔒, visibility 👁 and ••• menu. Sample uses "Frame / Notes / Have a guess / More answer" — hide the answer layer to quiz yourself. Free version is limited to 2 layers.</li>
+<li><b>Outlines</b>: entries jump to pages; the bold one is the current section; can be nested (chevron).</li>
+</ul>
+<figure class="med"><img src="screenshots/44-layers-menu-free-limit.jpg" alt=""><figcaption>Sidebar ••• menu and the free-tier layer limit notice</figcaption></figure>
+
+<!-- ============================================================ -->
+<h2 id="view">13. View, ruler, zoom window</h2>
+<div class="grid">
+<figure><img src="screenshots/45-view-panel.jpg" alt=""><figcaption>View panel</figcaption></figure>
+<figure><img src="screenshots/46-ruler.jpg" alt=""><figcaption>Ruler (cm both edges, rotation dial shows 0°)</figcaption></figure>
+<figure><img src="screenshots/47-zoom-window.jpg" alt=""><figcaption>Zoom window</figcaption></figure>
+</div>
+<ul>
+<li><b>Page View</b>: Vertical scroll, Horizontal (swipe), Two Pages side by side.</li>
+<li><b>Toolbar Position</b>: left, top, right, bottom. <b>Tab Bar Position</b> top/bottom (Pro).</li>
+<li>Keep iPad Awake, <b>Night Mode</b> (dark paper; ⚙ for options), Status Bar.</li>
+<li>Quick Access toggles: Ruler, Zoom Window, <b>Timer</b>.</li>
+<li><b>Ruler</b>: draggable/rotatable straight-edge; pen strokes near it snap straight.</li>
+<li><b>Zoom window</b>: magnified writing strip at the bottom (write big, it lands small). Blue box on the page shows the target area; controls ← → ↑ ↓ to advance and ✕; ⚙ for settings; auto-advance margin on the right.</li>
+<li>Menu <b>View</b>: Zoom to 100%, Zoom In, Zoom Out, Zoom to Fit, Full Screen.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="more">14. More menu &amp; per-notebook settings</h2>
+<div class="grid">
+<figure><img src="screenshots/36-notebook-more-menu.jpg" alt=""><figcaption>More (•••)</figcaption></figure>
+<figure><img src="screenshots/37-gesture-settings.jpg" alt=""><figcaption>Gesture Settings</figcaption></figure>
+<figure><img src="screenshots/38-document-editing-settings.jpg" alt=""><figcaption>Document Editing</figcaption></figure>
+<figure><img src="screenshots/39-customize-toolbar.jpg" alt=""><figcaption>Customize Toolbar</figcaption></figure>
+</div>
+<ul>
+<li>Top buttons: <b>Paper</b> (change template of current page), <b>Share</b> (export PDF / notebook), <b>Find</b> (search inside notebook text + handwriting), <b>1 – 1</b> (go to page).</li>
+<li>Page: Pin Page, <b>Expand &amp; Resize Page</b> (add margin space around a PDF page), Copy Page Link, Clear Page.</li>
+<li><b>Gesture Settings</b>: Undo/Redo by two-finger tap (three-finger tap redo) or three-finger swipe, or none; Finger double-tap = zoom to fit width.</li>
+<li><b>Document Editing</b>: Pull-to-add Page, page number indicator position + zoom %, zoom &amp; ruler buttons position, ruler units (cm/in), Apple Pencil hover effect.</li>
+<li><b>Customize Toolbar</b>: toggle and drag-reorder each tool (Pen, Highlighter, Tape, Eraser, Lasso, Hand, Presentation, Audio, Text, Page, Image, Shape, Stickers, Take Photo, Insert). Reset.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="settings">15. App settings</h2>
+<div class="grid">
+<figure><img src="screenshots/48-app-settings-about.jpg" alt=""><figcaption>About / Settings sheet (N logo)</figcaption></figure>
+<figure><img src="screenshots/49-themes.jpg" alt=""><figcaption>Themes</figcaption></figure>
+<figure><img src="screenshots/50-cloud-sync.jpg" alt=""><figcaption>Cloud Sync</figcaption></figure>
+</div>
+<ul>
+<li>Upgrade to Pro · Rate on App Store · Send Feedback · <b>Notebook Templates</b> (manage saved templates).</li>
+<li><b>Themes</b>: appearance System / Light / Dark; toolbar Match appearance / Dark.</li>
+<li><b>Cloud Sync</b>: iCloud sync (Pro), last-sync time, Diagnostics.</li>
+<li>Global Document Editing and Gesture Settings (same as per-notebook ones).</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="shortcuts">16. Menus &amp; keyboard shortcuts</h2>
+<p>On iPad these work with a hardware keyboard (hold ⌘ to see them). Touch gestures: two-finger tap = undo, three-finger tap = redo, pinch = zoom, finger double-tap = fit width, Pencil double-tap = switch to eraser.</p>
+<div class="tablewrap"><table>
+<tr><th>Menu</th><th>Items</th></tr>
+<tr><td>File</td><td>New Notebook, New Window, Move Tab to New Window, Open Library, Close Notebook, Close All</td></tr>
+<tr><td>Edit</td><td>Undo, Redo, Cut, Copy, Paste, Delete, Find…, Insert Textbox (⇧⌘T), Insert Image (⇧⌘I), Select Previous / Next Layer</td></tr>
+<tr><td>Tools</td><td>Pen <kbd>F</kbd>, Highlighter <kbd>G</kbd>, Eraser <kbd>E</kbd>, Lasso <kbd>A</kbd>, Hand <kbd>H</kbd>, Text <kbd>T</kbd>, Pen Favorite 1–9 <kbd>1</kbd>–<kbd>9</kbd></td></tr>
+<tr><td>View</td><td>Zoom to 100%, Zoom In, Zoom Out, Zoom to Fit, Enter Full Screen</td></tr>
+<tr><td>Navigate</td><td>Page Up/Down, Scroll to Top/Bottom, Go to page…, Back, Forward, Previous/Next/First/Last Tab</td></tr>
+</table></div>
+<figure class="small"><img src="screenshots/34-tools-menu-shortcuts.jpg" alt=""></figure>
+
+<!-- ============================================================ -->
+<h2 id="premium">17. Premium features: keep vs skip</h2>
+<figure class="small"><img src="screenshots/51-pro-upgrade.jpg" alt=""><figcaption>Pro is a one-time $6.99 unlock.</figcaption></figure>
+<p>Full Pro list: Sync with iCloud, Unlimited Notebooks, More than 3 Colour Pickers, Premium Templates, Unlimited Layers, Bookmarks, Outlines, Auto-Backup, Premium Shape Objects, Image Cropping, Advanced Lasso Options, Advanced Eraser Options, Tab-bar position. Here's what's worth building:</p>
+<div class="tablewrap"><table>
+<tr><th>Feature</th><th>Verdict</th><th>Why</th></tr>
+<tr><td>Cloud sync</td><td class="keep">Keep</td><td>Essential — people lose notes without it. Make it free in yours.</td></tr>
+<tr><td>Auto-backup</td><td class="keep">Keep</td><td>Cheap to build, saves users from disasters.</td></tr>
+<tr><td>Unlimited notebooks</td><td class="keep">Keep</td><td>A limit here just annoys people; make it free.</td></tr>
+<tr><td>Unlimited colours / colour favourites</td><td class="keep">Keep</td><td>3 colours is too few for study notes.</td></tr>
+<tr><td>Bookmarks</td><td class="keep">Keep</td><td>Simple and used a lot in long notebooks.</td></tr>
+<tr><td>Outlines (table of contents)</td><td class="keep">Keep</td><td>Great for textbooks/PDFs; can auto-import PDF outlines.</td></tr>
+<tr><td>Unlimited layers</td><td class="keep">Keep</td><td>Powers the "hide the answer" study trick.</td></tr>
+<tr><td>Erase whole stroke / highlight-only eraser</td><td class="keep">Keep</td><td>Stroke eraser is a basic expectation.</td></tr>
+<tr><td>Lasso object filters</td><td class="keep">Keep</td><td>Selecting only ink on top of a PDF is very handy.</td></tr>
+<tr><td>Image cropping</td><td class="keep">Keep</td><td>Basic image editing.</td></tr>
+<tr><td>Templates: Dot, Cornell, 2-column</td><td class="keep">Keep</td><td>The most used study layouts.</td></tr>
+<tr><td>Music / guitar TAB / storyboard / handwriting templates</td><td class="skip">Skip (for now)</td><td>Niche. Add a "import your own template" instead.</td></tr>
+<tr><td>Extra cover designs (botanical, composition, patterns)</td><td class="skip">Skip</td><td>Cosmetic. A few solid colours + custom image cover is enough.</td></tr>
+<tr><td>Premium shapes (hexagon, cloud, burst, star)</td><td class="skip">Skip</td><td>Rarely used; Auto Shape covers the common cases.</td></tr>
+<tr><td>Tab-bar position</td><td class="skip">Skip</td><td>Trivial preference, not worth the complexity.</td></tr>
+<tr><td>Eraser "auto-select previous tool"</td><td class="skip">Optional</td><td>Nice-to-have only.</td></tr>
+</table></div>
+
+<!-- ============================================================ -->
+<h2 id="better">18. How to make yours better</h2>
+<ul>
+<li><b>Fewer clicks for tool options</b>: Noteful needs select-then-click-again to open a panel and the panels are dense. Use a long-press or a small floating "quick bar" with size + colour.</li>
+<li><b>Real text editing in Quick Note</b>: the textbox flow is clunky (text tool must be chosen first). Let users just start typing on a page.</li>
+<li><b>Handwriting search everywhere</b>: OCR all ink in the background so library search finds words inside notes, not just names.</li>
+<li><b>Convert to text / math</b>: extend "Convert to Text" to math (LaTeX) and to tidy diagrams.</li>
+<li><b>Study mode</b>: turn tape, "?" stickers and hidden layers into a real flashcard/quiz mode with spaced repetition.</li>
+<li><b>Audio synced to ink</b>: tap a word to replay what was said when you wrote it (Notability's best feature, missing here).</li>
+<li><b>Cross-platform sync</b> (not just iCloud) — e.g. your own backend so web/Android users can join.</li>
+<li><b>Sharing &amp; collaboration</b>: share a notebook link, live co-editing.</li>
+<li><b>AI helpers</b>: summarise a page, make flashcards from notes, explain a highlighted PDF passage.</li>
+<li><b>Better empty states and onboarding</b>: the sample notebook is good — keep a guided sample.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="build">19. Data model &amp; build order</h2>
+<h3>Core data model</h3>
+<div class="tablewrap"><table>
+<tr><th>Entity</th><th>Fields</th></tr>
+<tr><td>Folder</td><td>id, name, parentId</td></tr>
+<tr><td>Tag</td><td>id, path ("Sample/Drawing"), colour</td></tr>
+<tr><td>Notebook</td><td>id, title, folderId, tagIds[], cover {templateId | image}, pinned, createdAt, updatedAt, trashedAt</td></tr>
+<tr><td>Page</td><td>id, notebookId, index, template {type, colour, size, orientation, lineSpacing, lineThickness} or pdfRef {fileId, pageNo}, tagIds[], bookmark {title}?, pinned</td></tr>
+<tr><td>Layer</td><td>id, pageId, name, order, visible, locked</td></tr>
+<tr><td>Stroke</td><td>id, layerId, tool (pen/highlighter/tape), penType, colour, width, style (solid/dashed/dotted), points[{x,y,pressure,t}]</td></tr>
+<tr><td>Object</td><td>id, layerId, kind (text/shape/image/sticker), frame {x,y,w,h,rotation}, style, content, link {url | notebookId+pageId}?</td></tr>
+<tr><td>OutlineItem</td><td>id, notebookId, title, pageId, parentId</td></tr>
+<tr><td>Sticker</td><td>id, name, payload (saved strokes/objects)</td></tr>
+<tr><td>AudioRecording</td><td>id, notebookId, file, duration, startedAt</td></tr>
+<tr><td>Template</td><td>id, name, category, kind (cover/paper), source (built-in / imported PDF)</td></tr>
+</table></div>
+
+<h3>Suggested build order</h3>
+<ol>
+<li>Library: notebooks list/grid, create/rename/delete (trash), sort, search by name.</li>
+<li>Editor shell: vertical page scroll, zoom/pan, undo/redo, ruled/blank/grid templates.</li>
+<li>Pen + highlighter + eraser with pressure and smoothing (this is the "feel" — spend time here).</li>
+<li>Lasso select: move, resize, delete, recolour, copy/paste.</li>
+<li>PDF import and export (share as PDF).</li>
+<li>Page manager: add, reorder, duplicate, delete, rotate.</li>
+<li>Text boxes, shapes, images, links.</li>
+<li>Folders, tags, pinned, bookmarks, outlines.</li>
+<li>Layers, tape (cover/reveal), stickers.</li>
+<li>Sync + auto-backup.</li>
+<li>Extras: zoom window, ruler, presentation mode, audio, handwriting OCR, AI.</li>
+</ol>
+
+<div class="tip">Note: while testing, a quick note called <b>"Notes on 27/10/26"</b> was created in your Noteful library (it has a test line, a yellow square and two empty text boxes). You can delete it. Your sample notebooks were not changed.</div>
+
+</div>
+</body>
+</html>
