@@ -1,7 +1,0 @@
-/target
-*.tmp
-ios/Notebook.xcodeproj
-ios/Notebook/Info.plist
-ios/tools
-web/pkg
-web/dist
